@@ -41,3 +41,17 @@ python3 cobertura.py --interactiu
 ```
 
 Només fa servir la biblioteca estàndard de Python 3. Amb `--limit 30` necessita uns 1 GB de RAM.
+
+## cadena.py
+
+Parteix d'un primer base (triat per posició) i hi encadena fins a `--passos` bytes d'operació. Cada byte és un operador (2 bits: `+`, `-`, `×`, `^`) i un operand (6 bits: 1 … 64). Per exemple, p = 7 amb els bytes `[×3][+5][^2]` dona ((7·3)+5)² = 676.
+
+Per a cada nombre de passos mostra el primer nombre no representat, la cobertura i els bits que caldria guardar (posició del primer + 8 per pas + marcador de longitud).
+
+```bash
+python3 cadena.py                                  # primers=8 bits, 3 passos, línia de 2^20
+python3 cadena.py --primers 4 --passos 3 --limit 24
+python3 cadena.py --interactiu
+```
+
+Amb línies grans i molts passos pot tardar minuts: cada pas prova els 256 bytes sobre tots els valors ja coberts.
