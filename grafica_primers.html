@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="ca">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Primers per posició</title>
+<style>
+:root{--surface:#fcfcfb;--text:#0b0b0b;--text2:#52514e;--muted:#8a8984;--grid:#e6e5e0;
+--s1:#2a78d6;--s2:#eb6834;--tip:#ffffff;--tipb:#d8d7d1}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--surface:#1a1a19;--text:#fff;
+--text2:#c3c2b7;--muted:#8e8d86;--grid:#2f2f2d;--s1:#3987e5;--s2:#d95926;--tip:#262625;--tipb:#3a3a37}}
+:root[data-theme="dark"]{--surface:#1a1a19;--text:#fff;--text2:#c3c2b7;--muted:#8e8d86;--grid:#2f2f2d;
+--s1:#3987e5;--s2:#d95926;--tip:#262625;--tipb:#3a3a37}
+*{box-sizing:border-box}
+body{margin:0;background:var(--surface);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:960px;margin:0 auto;padding:24px 16px 48px}
+h1{font-size:22px;margin:0 0 4px}
+h2{font-size:16px;margin:28px 0 2px}
+p{margin:4px 0;color:var(--text2)}
+.legend{display:flex;gap:18px;flex-wrap:wrap;margin:10px 0 4px;color:var(--text2)}
+.legend > span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:14px;height:3px;border-radius:2px;display:inline-block}
+.chart{position:relative;width:100%}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.axis text{fill:var(--muted);font-size:11px}
+.axis line{stroke:var(--grid)}
+.lbl{fill:var(--text2);font-size:12px}
+.tip{position:absolute;pointer-events:none;background:var(--tip);border:1px solid var(--tipb);border-radius:8px;
+padding:8px 10px;font-size:12px;color:var(--text);box-shadow:0 2px 8px rgba(0,0,0,.12);display:none;min-width:200px;z-index:2}
+.tip b{font-weight:600}
+.tip .r{display:flex;justify-content:space-between;gap:12px;color:var(--text2)}
+.tip .r span:last-child{color:var(--text);font-variant-numeric:tabular-nums}
+details{margin-top:28px}
+summary{cursor:pointer;color:var(--text2)}
+table{border-collapse:collapse;width:100%;margin-top:8px;font-variant-numeric:tabular-nums;font-size:12px}
+th,td{text-align:right;padding:4px 8px;border-bottom:1px solid var(--grid)}
+th{color:var(--text2);font-weight:600}
+.wrap{overflow-x:auto}
+</style>
+</head>
+<body>
+<main>
+<h1>Primers per posició</h1>
+<p>Amb <b>b</b> bits pots escriure un nombre fins a 2<sup>b</sup>−1, o bé apuntar a la posició 2<sup>b</sup> de la llista de primers. Quin nombre més gran assoleix cada opció?</p>
+
+<h2>Mida del valor més gran (en bits) segons els bits disponibles</h2>
+<p>Eix horitzontal logarítmic. Les dues línies gairebé es toquen: el primer només és una mica més gran.</p>
+<div class="legend">
+  <span><i class="sw" style="background:var(--s1)"></i><span>Valor directe: 2<sup>b</sup>−1</span></span>
+  <span><i class="sw" style="background:var(--s2)"></i><span>Primer a la posició 2<sup>b</sup></span></span>
+</div>
+<div class="chart" id="c1"></div>
+
+<h2>Bits extra que guanya el primer</h2>
+<p>log<sub>2</sub>(primer) − b. Creix molt lentament (com log<sub>2</sub>(b)): amb 1 KB (8.192 bits) només en són uns 12,5.</p>
+<div class="chart" id="c2"></div>
+<p style="margin-top:10px">Punts plens: primer calculat exactament. Punts buits: aproximació asimptòtica de p<sub>n</sub>.</p>
+
+<details>
+<summary>Veure la taula de dades</summary>
+<div class="wrap"><table id="taula"><thead><tr><th>bits</th><th>valor directe màx.</th><th>primer a la posició 2<sup>b</sup></th><th>bits del primer</th><th>bits extra</th><th>càlcul</th></tr></thead><tbody></tbody></table></div>
+</details>
+</main>
+<script>
+const D = [{"b": 1, "directe": 1.0, "primer": 1.584962500721156, "guany": 0.5849625007211561, "tipus": "exacte", "p": "3", "max": "1"}, {"b": 2, "directe": 2.0, "primer": 2.807354922057604, "guany": 0.8073549220576042, "tipus": "exacte", "p": "7", "max": "3"}, {"b": 3, "directe": 3.0, "primer": 4.247927513443585, "guany": 1.2479275134435852, "tipus": "exacte", "p": "19", "max": "7"}, {"b": 4, "directe": 4.0, "primer": 5.727920454563199, "guany": 1.7279204545631988, "tipus": "exacte", "p": "53", "max": "15"}, {"b": 5, "directe": 5.0, "primer": 7.03342300153745, "guany": 2.03342300153745, "tipus": "exacte", "p": "131", "max": "31"}, {"b": 6, "directe": 6.0, "primer": 8.280770770130603, "guany": 2.2807707701306033, "tipus": "exacte", "p": "311", "max": "63"}, {"b": 7, "directe": 7.0, "primer": 9.489847960439297, "guany": 2.489847960439297, "tipus": "exacte", "p": "719", "max": "127"}, {"b": 8, "directe": 8.0, "primer": 10.660887270302567, "guany": 2.6608872703025668, "tipus": "exacte", "p": "1619", "max": "255"}, {"b": 9, "directe": 9.0, "primer": 11.841957399099547, "guany": 2.841957399099547, "tipus": "exacte", "p": "3671", "max": "511"}, {"b": 10, "directe": 10.0, "primer": 12.99453022688921, "guany": 2.9945302268892107, "tipus": "exacte", "p": "8161", "max": "1023"}, {"b": 11, "directe": 11.0, "primer": 14.124686773651495, "guany": 3.1246867736514954, "tipus": "exacte", "p": "17863", "max": "2047"}, {"b": 12, "directe": 12.0, "primer": 15.246480830630462, "guany": 3.2464808306304622, "tipus": "exacte", "p": "38873", "max": "4095"}, {"b": 13, "directe": 13.0, "primer": 16.358393651896215, "guany": 3.3583936518962147, "tipus": "exacte", "p": "84017", "max": "8191"}, {"b": 14, "directe": 14.0, "primer": 17.461663289660923, "guany": 3.4616632896609225, "tipus": "exacte", "p": "180503", "max": "16383"}, {"b": 15, "directe": 15.0, "primer": 18.558588872392228, "guany": 3.558588872392228, "tipus": "exacte", "p": "386093", "max": "32767"}, {"b": 16, "directe": 16.0, "primer": 19.648148648572036, "guany": 3.648148648572036, "tipus": "exacte", "p": "821641", "max": "65535"}, {"b": 17, "directe": 17.0, "primer": 20.73275785907629, "guany": 3.7327578590762904, "tipus": "exacte", "p": "1742537", "max": "131071"}, {"b": 18, "directe": 18.0, "primer": 21.81171766098787, "guany": 3.8117176609878705, "tipus": "exacte", "p": "3681131", "max": "262143"}, {"b": 19, "directe": 19.0, "primer": 22.88652363082113, "guany": 3.886523630821131, "tipus": "exacte", "p": "7754077", "max": "524287"}, {"b": 20, "directe": 20.0, "primer": 23.95748743054084, "guany": 3.9574874305408407, "tipus": "exacte", "p": "16290047", "max": "1048575"}, {"b": 21, "directe": 21.0, "primer": 25.02479190549416, "guany": 4.024791905494158, "tipus": "exacte", "p": "34136029", "max": "2097151"}, {"b": 22, "directe": 22.0, "primer": 26.08898764268872, "guany": 4.088987642688721, "tipus": "exacte", "p": "71378569", "max": "4194303"}, {"b": 23, "directe": 23.0, "primer": 27.15052730249475, "guany": 4.150527302494751, "tipus": "aproximat", "p": null, "max": "8388607"}, {"b": 24, "directe": 24.0, "primer": 28.20913023036035, "guany": 4.209130230360351, "tipus": "aproximat", "p": null, "max": "16777215"}, {"b": 25, "directe": 25.0, "primer": 29.265304143370496, "guany": 4.265304143370496, "tipus": "aproximat", "p": null, "max": "33554431"}, {"b": 26, "directe": 26.0, "primer": 30.31924816335384, "guany": 4.319248163353841, "tipus": "aproximat", "p": null, "max": "67108863"}, {"b": 27, "directe": 27.0, "primer": 31.37113745926847, "guany": 4.371137459268471, "tipus": "aproximat", "p": null, "max": "134217727"}, {"b": 28, "directe": 28.0, "primer": 32.42112698615997, "guany": 4.421126986159969, "tipus": "aproximat", "p": null, "max": "268435455"}, {"b": 29, "directe": 29.0, "primer": 33.46935451602435, "guany": 4.469354516024353, "tipus": "aproximat", "p": null, "max": "536870911"}, {"b": 30, "directe": 30.0, "primer": 34.515943116548016, "guany": 4.515943116548016, "tipus": "aproximat", "p": null, "max": "1073741823"}, {"b": 31, "directe": 31.0, "primer": 35.56100319487096, "guany": 4.561003194870963, "tipus": "aproximat", "p": null, "max": "2147483647"}, {"b": 32, "directe": 32.0, "primer": 36.604634195392315, "guany": 4.604634195392315, "tipus": "aproximat", "p": null, "max": "4294967295"}, {"b": 33, "directe": 33.0, "primer": 37.646926019994545, "guany": 4.646926019994545, "tipus": "aproximat", "p": null, "max": "8589934591"}, {"b": 34, "directe": 34.0, "primer": 38.68796022373287, "guany": 4.687960223732873, "tipus": "aproximat", "p": null, "max": "17179869183"}, {"b": 35, "directe": 35.0, "primer": 39.727811027524055, "guany": 4.727811027524055, "tipus": "aproximat", "p": null, "max": "34359738367"}, {"b": 36, "directe": 36.0, "primer": 40.76654618063542, "guany": 4.766546180635423, "tipus": "aproximat", "p": null, "max": "68719476735"}, {"b": 37, "directe": 37.0, "primer": 41.804227699085786, "guany": 4.804227699085786, "tipus": "aproximat", "p": null, "max": "137438953471"}, {"b": 38, "directe": 38.0, "primer": 42.84091250090038, "guany": 4.84091250090038, "tipus": "aproximat", "p": null, "max": "274877906943"}, {"b": 39, "directe": 39.0, "primer": 43.87665295513415, "guany": 4.876652955134148, "tipus": "aproximat", "p": null, "max": "549755813887"}, {"b": 40, "directe": 40.0, "primer": 44.91149735841404, "guany": 4.911497358414039, "tipus": "aproximat", "p": null, "max": "1099511627775"}, {"b": 41, "directe": 41.0, "primer": 45.94549035024852, "guany": 4.9454903502485195, "tipus": "aproximat", "p": null, "max": "2199023255551"}, {"b": 42, "directe": 42.0, "primer": 46.978673276358755, "guany": 4.978673276358755, "tipus": "aproximat", "p": null, "max": "4398046511103"}, {"b": 43, "directe": 43.0, "primer": 48.011084507687634, "guany": 5.0110845076876345, "tipus": "aproximat", "p": null, "max": "8796093022207"}, {"b": 44, "directe": 44.0, "primer": 49.04275972145324, "guany": 5.042759721453237, "tipus": "aproximat", "p": null, "max": "17592186044415"}, {"b": 45, "directe": 45.0, "primer": 50.073732149567064, "guany": 5.073732149567064, "tipus": "aproximat", "p": null, "max": "35184372088831"}, {"b": 46, "directe": 46.0, "primer": 51.10403279888379, "guany": 5.104032798883793, "tipus": "aproximat", "p": null, "max": "70368744177663"}, {"b": 47, "directe": 47.0, "primer": 52.13369064704892, "guany": 5.1336906470489225, "tipus": "aproximat", "p": null, "max": "140737488355327"}, {"b": 48, "directe": 48.0, "primer": 53.16273281713394, "guany": 5.162732817133943, "tipus": "aproximat", "p": null, "max": "281474976710655"}, {"b": 49, "directe": 49.0, "primer": 54.19118473377062, "guany": 5.191184733770619, "tipus": "aproximat", "p": null, "max": "562949953421311"}, {"b": 50, "directe": 50.0, "primer": 55.2190702630984, "guany": 5.219070263098402, "tipus": "aproximat", "p": null, "max": "1125899906842623"}, {"b": 51, "directe": 51.0, "primer": 56.24641183850716, "guany": 5.246411838507157, "tipus": "aproximat", "p": null, "max": "2251799813685247"}, {"b": 52, "directe": 52.0, "primer": 57.27323057387863, "guany": 5.273230573878628, "tipus": "aproximat", "p": null, "max": "4503599627370495"}, {"b": 53, "directe": 53.0, "primer": 58.299546365795635, "guany": 5.299546365795635, "tipus": "aproximat", "p": null, "max": "9007199254740991"}, {"b": 54, "directe": 54.0, "primer": 59.32537798598977, "guany": 5.325377985989768, "tipus": "aproximat", "p": null, "max": "18014398509481983"}, {"b": 55, "directe": 55.0, "primer": 60.35074316513009, "guany": 5.3507431651300905, "tipus": "aproximat", "p": null, "max": "36028797018963967"}, {"b": 56, "directe": 56.0, "primer": 61.375658668912365, "guany": 5.375658668912365, "tipus": "aproximat", "p": null, "max": "72057594037927935"}, {"b": 57, "directe": 57.0, "primer": 62.40014036728603, "guany": 5.400140367286028, "tipus": "aproximat", "p": null, "max": "144115188075855871"}, {"b": 58, "directe": 58.0, "primer": 63.424203297551436, "guany": 5.424203297551436, "tipus": "aproximat", "p": null, "max": "288230376151711743"}, {"b": 59, "directe": 59.0, "primer": 64.44786172197004, "guany": 5.4478617219700425, "tipus": "aproximat", "p": null, "max": "576460752303423487"}, {"b": 60, "directe": 60.0, "primer": 65.4711291804526, "guany": 5.471129180452607, "tipus": "aproximat", "p": null, "max": "1152921504606846975"}, {"b": 61, "directe": 61.0, "primer": 66.49401853882347, "guany": 5.494018538823468, "tipus": "aproximat", "p": null, "max": "2305843009213693951"}, {"b": 62, "directe": 62.0, "primer": 67.5165420331011, "guany": 5.5165420331011035, "tipus": "aproximat", "p": null, "max": "4611686018427387903"}, {"b": 63, "directe": 63.0, "primer": 68.53871131018462, "guany": 5.538711310184624, "tipus": "aproximat", "p": null, "max": "9223372036854775807"}, {"b": 64, "directe": 64.0, "primer": 69.56053746529184, "guany": 5.560537465291844, "tipus": "aproximat", "p": null, "max": "18446744073709551615"}, {"b": 96, "directe": 96.0, "primer": 102.12459683331973, "guany": 6.124596833319728, "tipus": "aproximat", "p": null, "max": null}, {"b": 128, "directe": 128.0, "primer": 134.52726384455758, "guany": 6.527263844557581, "tipus": "aproximat", "p": null, "max": null}, {"b": 192, "directe": 192.0, "primer": 199.09800011234847, "guany": 7.098000112348473, "tipus": "aproximat", "p": null, "max": null}, {"b": 256, "directe": 256.0, "primer": 263.5049560516359, "guany": 7.504956051635872, "tipus": "aproximat", "p": null, "max": null}, {"b": 384, "directe": 384.0, "primer": 392.0809033813024, "guany": 8.080903381302392, "tipus": "aproximat", "p": null, "max": null}, {"b": 512, "directe": 512.0, "primer": 520.4909474328248, "guany": 8.490947432824782, "tipus": "aproximat", "p": null, "max": null}, {"b": 768, "directe": 768.0, "primer": 777.0704492950616, "guany": 9.070449295061621, "tipus": "aproximat", "p": null, "max": null}, {"b": 1024, "directe": 1024.0, "primer": 1033.4825137485407, "guany": 9.482513748540669, "tipus": "aproximat", "p": null, "max": null}, {"b": 1536, "directe": 1536.0, "primer": 1546.064270089294, "guany": 10.064270089294041, "tipus": "aproximat", "p": null, "max": null}, {"b": 2048, "directe": 2048.0, "primer": 2058.477583469079, "guany": 10.477583469079036, "tipus": "aproximat", "p": null, "max": null}, {"b": 3072, "directe": 3072.0, "primer": 3083.0607056371705, "guany": 11.060705637170486, "tipus": "aproximat", "p": null, "max": null}, {"b": 4096, "directe": 4096.0, "primer": 4107.474762629074, "guany": 11.474762629073666, "tipus": "aproximat", "p": null, "max": null}, {"b": 6144, "directe": 6144.0, "primer": 6156.058686677341, "guany": 12.05868667734103, "tipus": "aproximat", "p": null, "max": null}, {"b": 8192, "directe": 8192.0, "primer": 8204.473174856272, "guany": 12.473174856271726, "tipus": "aproximat", "p": null, "max": null}, {"b": 12288, "directe": 12288.0, "primer": 12301.057559128183, "guany": 13.05755912818313, "tipus": "aproximat", "p": null, "max": null}, {"b": 16384, "directe": 16384.0, "primer": 16397.472292494836, "guany": 13.472292494836438, "tipus": "aproximat", "p": null, "max": null}];
+const fmt = (x, d=2) => x.toLocaleString('ca-ES', {minimumFractionDigits:d, maximumFractionDigits:d});
+const fint = s => s ? BigInt(s).toLocaleString('ca-ES') : '—';
+const NS = 'http://www.w3.org/2000/svg';
+function el(t, a, p){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);if(p)p.appendChild(e);return e;}
+
+function chart(id, series, yLabel, logY){
+  const box=document.getElementById(id);box.innerHTML='';const W=Math.max(320,box.clientWidth), H=Math.round(Math.min(340,Math.max(240,W*0.55))), m={l:W<500?62:56,r:W<500?70:96,t:12,b:40};
+  const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,role:'img'},box);
+  const xs=D.map(d=>d.b), x0=Math.log2(1), x1=Math.log2(xs[xs.length-1]);
+  const X=b=>m.l+(Math.log2(b)-x0)/(x1-x0)*(W-m.l-m.r);
+  let ys=[];series.forEach(s=>D.forEach(d=>ys.push(d[s.k])));
+  const fy=v=>logY?Math.log2(Math.max(v,1e-9)):v;
+  let y0=logY?0:Math.min(0,...ys), y1=Math.max(...ys.map(fy));
+  if(!logY) y1=Math.ceil(y1/2)*2;
+  const Y=v=>H-m.b-(fy(v)-y0)/(y1-y0)*(H-m.t-m.b);
+  const ax=el('g',{class:'axis'},svg);
+  const yt=logY?[1,4,16,64,256,1024,4096,16384].filter(v=>Math.log2(v)<=y1+.01):[...Array(Math.floor(y1/2)+1).keys()].map(i=>i*2);
+  yt.forEach(v=>{el('line',{x1:m.l,x2:W-m.r,y1:Y(v),y2:Y(v)},ax);const t=el('text',{x:m.l-8,y:Y(v)+4,'text-anchor':'end'},ax);t.textContent=v.toLocaleString('ca-ES');});
+  [1,2,4,8,16,32,64,128,256,512,1024,2048,4096,8192,16384].filter((b,i)=>b<=xs[xs.length-1]&&(W>=600||i%2===0)).forEach(b=>{
+    const t=el('text',{x:X(b),y:H-m.b+18,'text-anchor':'middle'},ax);t.textContent=b>=1024?(b/1024)+'K':b;});
+  const xl=el('text',{x:(m.l+W-m.r)/2,y:H-4,'text-anchor':'middle',class:'lbl'},svg);xl.textContent='bits disponibles (b) · 1K = 1.024 bits';
+  const yl=el('text',{x:12,y:(m.t+H-m.b)/2,'text-anchor':'middle',class:'lbl',transform:`rotate(-90 12 ${(m.t+H-m.b)/2})`},svg);yl.textContent=yLabel;
+  // marca 1 KB
+  if(xs.includes(8192)){const g=el('line',{x1:X(8192),x2:X(8192),y1:m.t,y2:H-m.b,stroke:'var(--muted)','stroke-dasharray':'3 4'},svg);
+    const t=el('text',{x:X(8192)-4,y:m.t+12,'text-anchor':'end',class:'lbl'},svg);t.textContent='1 KB';}
+  series.forEach(s=>{
+    el('path',{d:D.map((d,i)=>(i?'L':'M')+X(d.b).toFixed(1)+' '+Y(d[s.k]).toFixed(1)).join(''),fill:'none',stroke:s.c,'stroke-width':2,'stroke-linejoin':'round'},svg);
+    if(s.dots) D.forEach(d=>el('circle',{cx:X(d.b),cy:Y(d[s.k]),r:3.5,fill:d.tipus==='exacte'?s.c:'var(--surface)',stroke:s.c,'stroke-width':1.5},svg));
+    const last=D[D.length-1], t=el('text',{x:W-m.r+8,y:Y(last[s.k])+(s.dy||0)+4,class:'lbl'},svg);t.textContent=s.n;
+  });
+  // hover
+  const cross=el('line',{y1:m.t,y2:H-m.b,stroke:'var(--muted)','stroke-width':1,visibility:'hidden'},svg);
+  const dots=series.map(s=>el('circle',{r:5,fill:s.c,stroke:'var(--surface)','stroke-width':2,visibility:'hidden'},svg));
+  const tip=document.createElement('div');tip.className='tip';box.appendChild(tip);
+  const hit=el('rect',{x:m.l,y:m.t,width:W-m.l-m.r,height:H-m.t-m.b,fill:'transparent'},svg);
+  function show(ev){
+    const r=svg.getBoundingClientRect(), px=(ev.clientX-r.left)*W/r.width;
+    let best=D[0];D.forEach(d=>{if(Math.abs(X(d.b)-px)<Math.abs(X(best.b)-px))best=d;});
+    cross.setAttribute('x1',X(best.b));cross.setAttribute('x2',X(best.b));cross.setAttribute('visibility','visible');
+    series.forEach((s,i)=>{dots[i].setAttribute('cx',X(best.b));dots[i].setAttribute('cy',Y(best[s.k]));dots[i].setAttribute('visibility','visible');});
+    tip.innerHTML=`<b>${best.b.toLocaleString('ca-ES')} bits</b>`+
+      `<div class="r"><span>Valor directe</span><span>${fmt(best.directe)} bits</span></div>`+
+      `<div class="r"><span>Primer a 2<sup>b</sup></span><span>${fmt(best.primer)} bits</span></div>`+
+      `<div class="r"><span>Bits extra</span><span>+${fmt(best.guany)}</span></div>`+
+      (best.p?`<div class="r"><span>Primer</span><span>${fint(best.p)}</span></div>`:`<div class="r"><span>Càlcul</span><span>aproximat</span></div>`);
+    tip.style.display='block';
+    const bx=box.getBoundingClientRect(), tx=ev.clientX-bx.left, tw=tip.offsetWidth;
+    tip.style.left=Math.min(Math.max(0,tx+14), bx.width-tw)+'px';
+    tip.style.top=(ev.clientY-bx.top+14)+'px';
+  }
+  function hide(){tip.style.display='none';cross.setAttribute('visibility','hidden');dots.forEach(d=>d.setAttribute('visibility','hidden'));}
+  hit.addEventListener('pointermove',show);hit.addEventListener('pointerleave',hide);hit.addEventListener('pointerdown',show);
+}
+function dibuixa(){
+chart('c1',[{k:'directe',c:'var(--s1)',n:'Directe',dy:10},{k:'primer',c:'var(--s2)',n:'Primer',dy:-8}],'mida en bits (escala log)',true);
+chart('c2',[{k:'guany',c:'var(--s2)',n:'Bits extra',dots:true}],'bits extra',false);
+}
+dibuixa();let rt;addEventListener('resize',()=>{clearTimeout(rt);rt=setTimeout(dibuixa,150);});
+const tb=document.querySelector('#taula tbody');
+D.forEach(d=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${d.b.toLocaleString('ca-ES')}</td><td>${d.max?fint(d.max):'2^'+d.b+' − 1'}</td><td>${d.p?fint(d.p):'≈ 2^'+fmt(d.primer)}</td><td>${fmt(d.primer)}</td><td>+${fmt(d.guany)}</td><td>${d.tipus}</td>`;tb.appendChild(tr);});
+</script>
+</body>
+</html>

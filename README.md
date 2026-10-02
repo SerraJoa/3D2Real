@@ -55,3 +55,12 @@ python3 cadena.py --interactiu
 ```
 
 Amb línies grans i molts passos pot tardar minuts: cada pas prova els 256 bytes sobre tots els valors ja coberts.
+
+## grafica_primers.py
+
+Genera `grafica_primers.html`: compara el valor més gran que es pot escriure amb b bits (2^b − 1) amb el primer que hi ha a la posició 2^b de la llista de primers. També mostra quants bits extra aporta el primer. Fins a 22 bits el primer es calcula exactament; per sobre s'usa l'aproximació asimptòtica de p_n.
+
+```bash
+python3 grafica_primers.py            # obre després grafica_primers.html al navegador
+python3 grafica_primers.py --exactes 20 --max-bits 8192
+```
