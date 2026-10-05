@@ -13,8 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+import shapely
 import trimesh
 from shapely.geometry import LineString, MultiPoint, Polygon
+from shapely import affinity
 from shapely.ops import unary_union
 
 PAGES = {"A4": (210.0, 297.0), "A3": (297.0, 420.0), "Carta": (215.9, 279.4)}
@@ -1063,52 +1065,125 @@ class Page:
     pieces: list[Piece] = field(default_factory=list)
 
 
-def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGIN,
-           gap: float = 4.0) -> tuple[list[Page], int]:
-    """Gira cada peça a la capsa mínima que hi cap i les col·loca en prestatges per pàgines.
+NEST_RES = 1.0   # mm per quadre de la graella de col·locació
+NEST_GAP = 3.0   # mm de separació mínima entre peces
+NEST_TURNS = 24  # girs repartits que es proven, a més dels de capsa mínima
 
-    Converteix les coordenades a l'eix y cap avall de l'SVG fent una simetria
-    (així el que es veu és la cara exterior). Retorna també quantes peces no
-    caben a l'àrea imprimible.
+
+def piece_outline(p: Piece):
+    """Forma real de la peça: cares i pestanyes."""
+    return unary_union([Polygon(t) for t in p.tris.values()] + [Polygon(q) for q in p.tab_polys()])
+
+
+def _raster(geom, res: float):
+    """Quadres de la graella que toca `geom` (per excés). Retorna la màscara i l'origen."""
+    x0, y0, x1, y1 = geom.bounds
+    w, h = int(math.ceil((x1 - x0) / res)), int(math.ceil((y1 - y0) / res))
+    xs = x0 + (np.arange(w) + 0.5) * res
+    ys = y0 + (np.arange(h) + 0.5) * res
+    gx, gy = np.meshgrid(xs, ys)
+    fat = geom.buffer(res * 0.71)  # mitja diagonal: si toca el quadre, el centre hi cau
+    return shapely.contains_xy(fat, gx, gy), (x0, y0)
+
+
+def _free_spot(occ: np.ndarray, focc, mask: np.ndarray) -> tuple[int, int] | None:
+    """Primera posició (fila, columna), de dalt a baix i d'esquerra a dreta, on `mask` no toca `occ`."""
+    H, W = occ.shape
+    h, w = mask.shape
+    if h > H or w > W:
+        return None
+    pad = np.zeros_like(occ, dtype=float)
+    pad[:h, :w] = mask
+    corr = np.fft.irfft2(focc * np.conj(np.fft.rfft2(pad)), s=occ.shape)[:H - h + 1, :W - w + 1]
+    free = np.argwhere(corr < 0.5)
+    if not len(free):
+        return None
+    i, j = free[0]  # argwhere ja va per files i després columnes
+    return int(i), int(j)
+
+
+def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGIN,
+           gap: float = NEST_GAP, res: float = NEST_RES) -> tuple[list[Page], int]:
+    """Col·loca les peces segons la seva forma real, no per capses.
+
+    Converteix les coordenades a l'eix y cap avall de l'SVG fent una simetria (així el
+    que es veu és la cara exterior). Cada peça, de la més gran a la més petita, prova a
+    cada pàgina les orientacions de capsa més petita (girades de 90 en 90°) i `NEST_TURNS`
+    girs repartits, i es queda la posició que deixa la seva vora de baix més amunt
+    (a igualtat, la que ocupa més quadres: la peça més ben encaixada). La pàgina és
+    una graella de quadres de `res` mm; la cerca de lloc lliure es fa amb FFT.
+    Retorna també quantes peces no caben a l'àrea imprimible.
     """
     W, H = page[0] - 2 * margin, page[1] - 2 * margin
-    sized = []
+    # La separació entre peces pot caure sobre el marge: la graella s'hi estén mitja separació.
+    pad = gap / 2 - 0.05  # el contorn ampliat és poligonal: pot quedar una mica curt
+    Hn, Wn = int((H + 2 * pad) // res), int((W + 2 * pad) // res)
     for p in pieces:
-        pts = p.points()
-        # Capsa mínima primer; si no hi cap, el marc del desplegament (que sí que hi cap).
-        ang = _fit_angle(pts, W, H)
-        ang = _best_rotation(pts) if ang is None else ang
-        c, s = math.cos(ang), math.sin(ang)
-        R = np.array([[c, s], [-s, c]]) @ np.diag([1.0, -1.0])
-        r = pts @ R
-        w, h = np.ptp(r[:, 0]), np.ptp(r[:, 1])
-        p.transform(lambda x, R=R: x @ R)
-        if w > W and h <= W and w <= H:  # girar 90° si així hi cap
-            p.transform(lambda x: np.column_stack([-x[:, 1], x[:, 0]]))
-            w, h = h, w
-        lo = p.points().min(axis=0)
-        p.transform(lambda x, lo=lo: x - lo)
-        sized.append((h, w, p))
+        p.transform(lambda x: x * np.array([1.0, -1.0]))
+    order = sorted(pieces, key=lambda p: -piece_outline(p).area)
 
-    sized.sort(key=lambda t: -t[0])
-    pages: list[Page] = [Page()]
+    sheets: list[tuple[Page, np.ndarray]] = []
     big: list[Page] = []
-    x = y = shelf = 0.0
-    for h, w, p in sized:
-        if w > W or h > H:  # no hi cap: pàgina pròpia i avís
-            p.transform(lambda q: q + margin)
-            big.append(Page([p]))
-            continue
-        if x + w > W:
-            x, y, shelf = 0.0, y + shelf + gap, 0.0
-        if y + h > H:
-            pages.append(Page())
-            x = y = shelf = 0.0
-        p.transform(lambda q, dx=margin + x, dy=margin + y: q + np.array([dx, dy]))
-        pages[-1].pieces.append(p)
-        x += w + gap
-        shelf = max(shelf, h)
-    return [pg for pg in pages if pg.pieces] + big, len(big)
+    for p in order:
+        base = piece_outline(p).buffer(gap / 2)
+        pts = p.points()
+        fit = _fit_angle(pts, W, H)
+        angles = [] if fit is None else [fit, fit + math.pi / 2]
+        for ang, _, _ in _rotations(pts)[:2]:
+            angles += [ang + k * math.pi / 2 for k in range(4)]
+        # Les peces ramificades encaixen millor amb més girs.
+        angles += [k * 2 * math.pi / NEST_TURNS for k in range(NEST_TURNS)]
+        options = []
+        for ang in angles:
+            geom = affinity.rotate(base, ang, origin=(0, 0), use_radians=True)
+            mask, origin = _raster(geom, res)
+            options.append((ang, mask, origin))
+
+        placed = False
+        for page_obj, occ in sheets + [(None, None)]:
+            if page_obj is None:  # pàgina nova
+                occ = np.zeros((Hn, Wn), dtype=bool)
+            focc = np.fft.rfft2(occ.astype(float))
+            best = None
+            for ang, mask, origin in options:
+                spot = _free_spot(occ, focc, mask)
+                if spot is not None:
+                    key = (spot[0] + mask.shape[0], -int(mask.sum()), spot[1])
+                    if best is None or key < best[0]:
+                        best = (key, spot, ang, mask, origin)
+            if best is None:
+                continue
+            _, (i, j), ang, mask, (ox, oy) = best
+            c, s_ = math.cos(ang), math.sin(ang)
+            R = np.array([[c, s_], [-s_, c]])
+            dx, dy = margin - pad + j * res - ox, margin - pad + i * res - oy
+            p.transform(lambda x, R=R, d=np.array([dx, dy]): x @ R + d)
+            occ[i:i + mask.shape[0], j:j + mask.shape[1]] |= mask
+            if page_obj is None:
+                page_obj = Page()
+                sheets.append((page_obj, occ))
+            page_obj.pieces.append(p)
+            placed = True
+            break
+        if not placed:
+            # La graella va per excés: una peça molt justa pot no trobar-hi lloc. Si la forma
+            # exacta hi cap girada d'alguna manera, va sola en una pàgina; si no, és massa gran.
+            pts = p.points()
+            ang = _fit_angle(pts, W, H)
+            fits = ang is not None
+            ang = _best_rotation(pts) if ang is None else ang
+            c, s_ = math.cos(ang), math.sin(ang)
+            p.transform(lambda x, R=np.array([[c, s_], [-s_, c]]): x @ R)
+            q = p.points()
+            if np.ptp(q[:, 0]) > W and np.ptp(q[:, 0]) <= H:  # girar 90° si així hi cap
+                p.transform(lambda x: np.column_stack([-x[:, 1], x[:, 0]]))
+            lo = p.points().min(axis=0)
+            p.transform(lambda x, lo=lo: x - lo + margin)
+            if fits:
+                sheets.append((Page([p]), np.ones((Hn, Wn), dtype=bool)))
+            else:
+                big.append(Page([p]))
+    return [pg for pg, _ in sheets] + big, len(big)
 
 
 def _pts(a: np.ndarray) -> str:
@@ -1161,6 +1236,7 @@ class Result:
     pieces: list[Piece]
     faces: int
     stats: dict[str, int]
+    sheets: list[list[Piece]] = field(default_factory=list)  # peces de cada pàgina
 
     def zip_bytes(self) -> bytes:
         buf = io.BytesIO()
@@ -1226,4 +1302,4 @@ def make_papercraft(mesh: trimesh.Trimesh, target_faces: int, size_mm: float,
     stats.update(peces=len(pieces), pagines=len(pages), massa_grans=oversize,
                  zones=n_zones, peces_petites=sum(1 for p in pieces if len(p.tris) <= SMALL_PIECE))
     svgs = [page_svg(pg, size, i, len(pages), face_numbers) for i, pg in enumerate(pages, 1)]
-    return Result(svgs, pieces, len(m.faces), stats)
+    return Result(svgs, pieces, len(m.faces), stats, [pg.pieces for pg in pages])

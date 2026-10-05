@@ -35,7 +35,10 @@ streamlit run app.py
      alternades perpendiculars a l'aresta, amb 0,4 mm de joc, i cadascuna conserva la vora;
    - si no es poden dentar sense deixar trossos solts → es passa a l'altre costat de la costura;
    - amb una cara, o no hi ha cap altra opció → es retalla.
-5. **Pàgines**: gira cada peça a la capsa mínima i les col·loca en prestatges (A4, A3, Carta).
+5. **Pàgines** (A4, A3, Carta): les peces es col·loquen segons la seva forma real, no per
+   capses. La pàgina és una graella d'1 mm; cada peça, de la més gran a la més petita,
+   prova uns 30 girs i es queda el lloc lliure que deixa la seva vora de baix més amunt
+   (la cerca es fa amb FFT). Entre peces hi ha 3 mm de separació.
 
 ## Llegenda
 
@@ -52,8 +55,8 @@ streamlit run app.py
 - En superfícies corbes (esferes), tancar del tot el ventall d'un vèrtex deixa una escletxa
   massa estreta per a una pestanya. Les zones naturals ho resolen en gran part (esfera de
   320 cares: de 42 peces a 11), però en poden quedar algunes de petites.
-- La col·locació a la pàgina fa servir capses rectangulars: peces corbes i llargues
-  (anelles d'un tor) aprofiten poc el paper.
+- Les peces grans es fan tan grans com permet la pàgina: dues peces de mitja pàgina
+  ramificades poden no compartir full encara que l'àrea total ho permeti.
 - Una peça unida pot quedar amb forats interiors, que s'han de retallar per dins.
 
 ## Tests

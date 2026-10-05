@@ -254,3 +254,35 @@ def test_zones_que_tanquen_problemes_redueixen_peces_a_l_esfera():
     assert amb.stats["peces"] <= sense.stats["peces"] / 2
     assert amb.stats["peces_petites"] <= sense.stats["peces_petites"] / 4
     assert amb.stats["sense_pestanya"] == 0
+
+
+def test_peces_de_la_mateixa_pagina_no_es_toquen(result):
+    _, r = result
+    for sheet in r.sheets:
+        outlines = [pc.piece_outline(p) for p in sheet]
+        for a, b in itertools.combinations(outlines, 2):
+            assert a.distance(b) >= pc.NEST_GAP - 0.2
+
+
+def _peca_en_l():
+    """L de 100×150 mm amb braços de 40 mm, feta de 4 triangles."""
+    p = pc.Piece()
+    quads = [[(0, 0), (100, 0), (100, 40), (0, 40)], [(0, 40), (40, 40), (40, 150), (0, 150)]]
+    k = 0
+    for q in quads:
+        q = np.array(q, float)
+        for tri in (q[[0, 1, 2]], q[[0, 2, 3]]):
+            p.place(k, tri, Polygon(tri))
+            k += 1
+    return p
+
+
+def test_col_locacio_per_forma_aprofita_el_paper():
+    # Per capses, una L de 100×150 ocupa una pàgina sencera (dues no hi caben ni de costat
+    # ni una sobre l'altra); encaixades l'una dins l'altra, n'hi caben dues.
+    pieces = [_peca_en_l(), _peca_en_l()]
+    pages, oversize = pc.layout(pieces, pc.PAGES["A4"])
+    assert oversize == 0
+    assert len(pages) == 1
+    a, b = (pc.piece_outline(p) for p in pieces)
+    assert a.distance(b) >= pc.NEST_GAP - 0.2
