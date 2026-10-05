@@ -308,23 +308,27 @@ def test_dents_de_la_costella_entren_a_les_parets(caixa_costella):
     assert long_side == pytest.approx(48 + 2 * 3, abs=0.2)
 
 
-def test_costella_de_l_esfera_en_trams_que_es_poden_enfilar():
-    import shapely
+def test_l_esfera_es_munta_amb_una_sola_costella_des_del_mig():
     import papercraft as pc
     m = pc.scale_to(pc.clean(trimesh.creation.icosphere(2, radius=30)), 90)
     z0, z1 = m.bounds[:, 2]
     K = int(math.ceil((z1 - z0) / 3))
     solid = [lm.slice_at(m, z0 + (k + 0.5) * 3 + 1e-7) for k in range(K)]
     ribs, notches, notes = lm.spine(solid, lm.hollow(solid, 6.0, 3.0), 3.0, 6.0)
+    assert len(ribs) == 1
+    assert "comença per" in notes[0] and "per dalt" in notes[0] and "per baix" in notes[0]
+
+
+def test_una_cintura_parteix_la_costella():
+    # Rellotge de sorra: s'estreny al mig i torna a eixamplar-se. Cap capa no pot passar
+    # per la cintura, així que la costella es parteix en dos trams que la comparteixen.
+    import papercraft as pc
+    prof = np.array([[0, 0], [30, 0], [30, 5], [12, 30], [30, 55], [30, 60], [0, 60]], float)
+    m = pc.scale_to(pc.clean(trimesh.creation.revolve(prof, sections=24)), 90)
+    z0, z1 = m.bounds[:, 2]
+    K = int(math.ceil((z1 - z0) / 3))
+    solid = [lm.slice_at(m, z0 + (k + 0.5) * 3 + 1e-7) for k in range(K)]
+    ribs, notches, notes = lm.spine(solid, lm.hollow(solid, 6.0, 3.0), 3.0, 6.0)
     assert len(ribs) == 2
     shared = set.intersection(*({t for _, t, _ in p.labels} for p in ribs))
-    assert len(shared) == 1                        # comparteixen la capa més ampla
-    for p in ribs:
-        # Cada tram només s'eixampla en un sentit: cada capa s'hi enfila des de l'extrem estret.
-        widths = []
-        for _, lab, _ in sorted(p.labels, key=lambda lb: int(lb[1][1:])):
-            k = int(lab[1:]) - 1
-            band = p.shape.intersection(shapely.geometry.box(-1e4, k * 3 + 0.05, 1e4, (k + 1) * 3 - 0.05))
-            widths.append(band.bounds[2] - band.bounds[0])
-        assert widths == sorted(widths) or widths == sorted(widths, reverse=True)
-    assert len(notes) == 2 and all("enfila-hi" in n for n in notes)
+    assert len(shared) == 1

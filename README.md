@@ -93,10 +93,12 @@ streamlit run app.py
 - **Alineació amb costella** (per defecte quan es buida): en lloc de columnes, una costella
   vertical dins la cavitat, seguint-ne l'eix llarg, amb una dent a cada capa que entra a
   dues osques de la paret (mitja paret de fondària, 0,1 mm de joc): fixa la capa en totes
-  direccions i en el gir. Es parteix en trams on l'amplada només creix o només decreix,
-  perquè les capes s'hi puguin enfilar des de l'extrem estret; dos trams comparteixen la
-  capa més ampla (mitja dent cadascun). Les instruccions diuen l'ordre d'enfilar. Les
-  peces que la costella no toca (tapes, trossos massissos) van amb columnes.
+  direccions i en el gir. Es munta començant per la capa més ampla i enfilant les altres
+  cap amunt (per dalt) i cap avall (per baix): cada capa passa per trams de costella que
+  caben dins les seves osques. Només es parteix a les cintures (on la cavitat s'estreny i
+  torna a eixamplar-se), i dos trams comparteixen la capa de la cintura (mitja dent
+  cadascun). Les instruccions diuen l'ordre. Les peces que la costella no toca (tapes,
+  trossos massissos) van amb columnes.
 
 ## Llegenda (paper)
 

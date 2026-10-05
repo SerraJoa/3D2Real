@@ -236,9 +236,9 @@ def spine(solid: list, geoms: list, t: float, wall: float):
 
     La costella passa per la cavitat seguint l'eix llarg de la cavitat més gran. A cada
     capa té una dent que entra a les osques de les dues parets, de manera que fixa la capa
-    en totes direccions i en el gir. Es parteix en trams on l'amplada només creix o només
-    decreix, perquè cada capa s'hi pugui enfilar des de l'extrem estret; dos trams
-    consecutius comparteixen la capa més ampla (mitja alçada de dent cadascun).
+    en totes direccions i en el gir. Es munta començant per la capa més ampla i enfilant les
+    altres cap amunt i cap avall; només es parteix a les cintures (on la cavitat s'estreny i
+    torna a eixamplar-se), i dos trams comparteixen la capa de la cintura (mitja dent cadascun).
 
     Retorna (peces de costella, osques per capa {k: [polígons]}, notes de muntatge).
     """
@@ -289,25 +289,28 @@ def spine(solid: list, geoms: list, t: float, wall: float):
 
     parts, notes = [], []
     for gi, grp in enumerate(groups):
-        widths = [b - a for _, a, b in grp]
-        # Trams monòtons: es talla a cada canvi de tendència.
-        cuts, trend = [0], 0
+        # Trams que es poden muntar d'una peça: des de la capa més ampla cap a cada
+        # extrem, cada dent ha de cabre dins de l'anterior (la capa hi passa pel damunt).
+        # Es comença per la capa més ampla i s'enfila cap amunt i cap avall. Només es talla
+        # on la cavitat s'estreny i torna a eixamplar-se (una cintura).
+        inside = lambda i, j: grp[i][1] >= grp[j][1] - 1e-6 and grp[i][2] <= grp[j][2] + 1e-6
+        runs, i0, phase = [], 0, "puja"
         for i in range(1, len(grp)):
-            dw = widths[i] - widths[i - 1]
-            sign = (dw > 1e-6) - (dw < -1e-6)
-            if sign and trend and sign != trend:
-                cuts.append(i - 1)  # la capa de gir es comparteix
-            if sign:
-                trend = sign
-        cuts.append(len(grp) - 1)
-        runs = [(cuts[i], cuts[i + 1]) for i in range(len(cuts) - 1)] or [(0, 0)]
+            if phase == "puja" and inside(i - 1, i):
+                continue
+            if inside(i, i - 1):
+                phase = "baixa"
+                continue
+            runs.append((i0, i - 1))  # cintura: la capa i-1 es comparteix
+            i0, phase = i - 1, "puja"
+        runs.append((i0, len(grp) - 1))
         for ri, (i0, i1) in enumerate(runs):
             rects = []
             for i in range(i0, i1 + 1):
                 k, a, b = grp[i]
                 lo, hi = k * t, (k + 1) * t
                 if i == i0 and ri > 0:
-                    lo += t / 2   # comparteix la capa de gir amb el tram de sota
+                    lo += t / 2   # comparteix la capa de la cintura amb el tram de sota
                 if i == i1 and ri < len(runs) - 1:
                     hi -= t / 2   # i amb el de sobre
                 rects.append(shapely.geometry.box(a, lo, b, hi))
@@ -322,13 +325,17 @@ def spine(solid: list, geoms: list, t: float, wall: float):
                                     float(min(2.0, 0.7 * t))))
             parts.append(part)
             ks = [grp[i][0] for i in range(i0, i1 + 1)]
-            ws = widths[i0:i1 + 1]
-            if ws[-1] >= ws[0]:
-                order, end = f"L{ks[-1] + 1}…L{ks[0] + 1}", "per baix"
-            else:
-                order, end = f"L{ks[0] + 1}…L{ks[-1] + 1}", "per dalt"
-            notes.append(f"  costella {name}: capes L{ks[0] + 1}–L{ks[-1] + 1}; enfila-hi les capes "
-                         f"{end}, en aquest ordre: {order}")
+            ws = [grp[i][2] - grp[i][1] for i in range(i0, i1 + 1)]
+            p = int(np.argmax(ws))
+            up = [f"L{k + 1}" for k in ks[p + 1:]]
+            down = [f"L{k + 1}" for k in reversed(ks[:p])]
+            how = [f"comença per L{ks[p] + 1} (la més ampla)"]
+            span = lambda xs: xs[0] if len(xs) == 1 else f"{xs[0]}…{xs[-1]}"
+            if up:
+                how.append(f"després enfila per dalt {span(up)}")
+            if down:
+                how.append(f"i per baix {span(down)}")
+            notes.append(f"  costella {name}: capes L{ks[0] + 1}–L{ks[-1] + 1}; " + ", ".join(how))
     return parts, notches, notes
 
 
