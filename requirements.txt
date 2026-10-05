@@ -1,0 +1,4 @@
+streamlit
+trimesh
+numpy
+shapely
