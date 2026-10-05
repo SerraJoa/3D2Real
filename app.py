@@ -8,6 +8,7 @@ import laminacio
 import laser
 import papercraft as pc
 import vista
+import visor
 
 st.set_page_config(page_title="Desplegables", layout="wide")
 st.title("✂️ Desplegables — 3D → paper i làser")
@@ -26,6 +27,15 @@ def show(svgs: list[str], label: str) -> None:
 def svg_img(svg: str, width: str = "100%") -> None:
     st.markdown(f'<img src="data:image/svg+xml;base64,{base64.b64encode(svg.encode()).decode()}" '
                 f'style="width:{width}"/>', unsafe_allow_html=True)
+
+
+def assembly_view(r, solids, key: str) -> None:
+    """Vista 3D del model muntat; les dades s'empaqueten un cop per resultat."""
+    cache = st.session_state.setdefault("_visor", {})
+    if key not in cache or cache[key][0] is not r:
+        cache[key] = (r, visor.pack(solids(r)))
+    st.markdown("**Vista del muntatge**")
+    visor.show([], key=f"visor_{key}", data=cache[key][1])
 
 
 def ranges(ks: list[int]) -> str:
@@ -193,6 +203,7 @@ if models:
                                "pestanya: enganxa'ls amb cinta per darrere.")
                 if s["massa_grans"]:
                     st.warning(f"{s['massa_grans']} peces no caben a la pàgina.")
+                assembly_view(r, visor.paper_solids, "paper")
                 st.download_button("⬇️ Descarrega les pàgines (SVG en un ZIP)", r.zip_bytes(),
                                    "desplegable.zip", "application/zip")
                 st.info("Contínua = tall · ratlles = plec de vall · punt i ratlla = plec de "
@@ -225,15 +236,11 @@ if models:
                                f"{s['costelles']} costelles · {s['mitges_fustes']} mitges fustes · "
                                f"{s['ranures']} ranures · "
                                f"{s['planxes']} planxes")
-                    st.markdown("**Grups de plaques** (un color per grup unit; vora negra = placa "
-                                "sense cap suport)")
-                    v = vista.plates_view(r, width=260, yaw=25, pitch=25)
-                    st.markdown(f'<img src="data:image/svg+xml;base64,'
-                                f'{base64.b64encode(v.encode()).decode()}"/>',
-                                unsafe_allow_html=True)
                     if s["grups_de_plaques"] > 1:
                         st.warning(f"Les plaques queden en {s['grups_de_plaques']} grups sense "
-                                   "suport entre ells: hi ha plaques massa petites per a suports.")
+                                   "suport entre ells (a la vista, un color per grup): hi ha "
+                                   "plaques massa petites per a suports.")
+                    assembly_view(r, visor.cares_solids, "cares")
             else:
                 with c2:
                     column = st.number_input("Diàmetre de les tiges (mm)", 1.0, 20.0, 5.0, 0.5)
@@ -261,6 +268,7 @@ if models:
                         st.warning(f"{s['peces_amb_una_columna']} peces amb una sola columna i "
                                    f"{s['peces_sense_columna']} sense cap (massa estretes): "
                                    "alinea-les amb el contorn gravat.")
+                    assembly_view(r, visor.layers_solids, "capes")
             if r:
                 if r.stats["massa_grans"]:
                     st.warning(f"{r.stats['massa_grans']} peces no caben a la planxa.")

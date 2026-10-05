@@ -21,7 +21,7 @@ from shapely.geometry import LineString, MultiPoint, Polygon
 from shapely.ops import unary_union
 
 import papercraft as pc
-from laser import LaserResult, Part, nest
+from laser import LaserResult, Part, nest, placed, pose, solid
 
 BRACKET_SPACING = 80.0  # mm d'aresta per suport (com a mínim un per aresta)
 BIG = 1000.0
@@ -305,11 +305,13 @@ def _plane_basis(N: np.ndarray):
     return _basis(N, hint)
 
 
-def rib_candidate(m, plate_of, plates, normals, to2d, origin, N, t: float):
+def rib_candidate(m, plate_of, plates, normals, to2d, origin, N, t: float, solid_of=None):
     """Costella al pla (origin, N): forma, tenons i ranures a cada placa que travessa.
 
     Retorna (components, ranures per placa) o None. Cada component és (forma 2D,
-    plaques que hi encaixen, base 3D per tornar al pla).
+    plaques que hi encaixen, base 3D per tornar al pla). `solid_of(k)` dona la placa k en
+    3D: la costella es retalla amb la secció de totes les plaques que talla (també les que hi
+    passen massa de biaix per encaixar-hi), perquè no en trepitgi cap.
     """
     from laminacio import section_polygon
     segs, faces = trimesh.intersections.mesh_plane(m, N, origin, return_faces=True)
@@ -348,9 +350,13 @@ def rib_candidate(m, plate_of, plates, normals, to2d, origin, N, t: float):
         inward3 = -nproj / sin
         g = np.cross(ell, n)  # dins el pla de la placa, perpendicular a la línia de tall
         half = (t / 2) / sin + SLOT_FIT
+        # De biaix, la costella travessa el gruix en diagonal: a la cara interior (fondària t)
+        # el seu pla mig s'ha desplaçat `shift` dins la placa.
+        shift = t * float(N @ n) / float(N @ g)
+        g0, g1 = min(0.0, shift) - half, max(0.0, shift) + half
         slot = Polygon(to2d(k, np.array([M3 + ell * a + g * b for a, b in
-                       ((-tw / 2 - SLOT_FIT, -half), (tw / 2 + SLOT_FIT, -half),
-                        (tw / 2 + SLOT_FIT, half), (-tw / 2 - SLOT_FIT, half))])))
+                       ((-tw / 2 - SLOT_FIT, g0), (tw / 2 + SLOT_FIT, g0),
+                        (tw / 2 + SLOT_FIT, g1), (-tw / 2 - SLOT_FIT, g1))])))
         if not plates[k].shape.buffer(-0.5).contains(slot):
             continue
         M, e, inw = to_plane(M3)[0], to_plane(M3 + ell)[0] - to_plane(M3)[0], \
@@ -366,6 +372,21 @@ def rib_candidate(m, plate_of, plates, normals, to2d, origin, N, t: float):
     hole = S.buffer(-(depth_max + w), join_style=2)
     if not hole.is_empty:
         body = body.difference(hole)  # costella buidada: una anella
+    if solid_of is not None:
+        across = []
+        for k in plates:
+            pm = solid_of(k)
+            if pm is None:
+                continue
+            h = (pm.vertices - origin) @ N
+            if h.min() >= t / 2 or h.max() <= -t / 2:
+                continue
+            for dz in np.linspace(-t / 2, t / 2, 5):  # tot el gruix de la costella
+                sg = trimesh.intersections.mesh_plane(pm, N, origin + N * dz)
+                if len(sg):
+                    across.append(section_polygon([to_plane(x) for x in sg]))
+        if across:
+            body = body.difference(unary_union(across).buffer(SLOT_FIT, join_style=2))
     pegs = {k: Polygon([M - e * tw / 2, M + e * tw / 2, M + e * tw / 2 + inw * (depth_max + 1.0),
                         M - e * tw / 2 + inw * (depth_max + 1.0)])
             for k, (M, e, inw, tw) in tenons.items()}
@@ -378,7 +399,7 @@ def rib_candidate(m, plate_of, plates, normals, to2d, origin, N, t: float):
     return (comps, slots) if comps else None
 
 
-def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float):
+def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, solid_of=None):
     """Costelles interiors per unir els grups de plaques que els suports no han pogut unir.
 
     Una costella és una secció del model (menys el gruix de les plaques, buidada per dins)
@@ -415,7 +436,7 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float):
             axis = np.linalg.svd(ns, full_matrices=False)[2][-1]
             normals_c.append(axis / np.linalg.norm(axis))
             offsets.append(m.vertices[np.unique(m.faces[fs])])
-        best, best_key = None, None
+        found = []
         for N in normals_c:
             heights = set()
             for pts in offsets:
@@ -429,9 +450,21 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float):
                 comps, slots = cand
                 merged = sum(len({find(k) for k in ks}) - 1 for _, ks in comps)
                 area = sum(g.area for g, _ in comps)
-                key = (merged, -area)
-                if merged > 0 and (best_key is None or key > best_key):
-                    best_key, best = key, (N, origin, comps, slots)
+                if merged > 0:
+                    found.append(((merged, -area), N, origin))
+        # Els millors plans, ara retallats amb la secció exacta de les plaques que travessen.
+        best, best_key = None, None
+        for key, N, origin in sorted(found, key=lambda x: x[0], reverse=True)[:6]:
+            if best_key is not None and key[0] < best_key[0]:
+                break
+            cand = rib_candidate(m, plate_of, plates, normals, to2d, origin, N, t, solid_of)
+            if cand is None:
+                continue
+            comps, slots = cand
+            merged = sum(len({find(k) for k in ks}) - 1 for _, ks in comps)
+            key = (merged, -sum(g.area for g, _ in comps))
+            if merged > 0 and (best_key is None or key > best_key):
+                best_key, best = key, (N, origin, comps, slots)
         if best is None:
             break
         N, origin, comps, slots = best
@@ -442,6 +475,7 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float):
             links.append(ks)
             name = f"K{len(ribs) + 1}"
             part = Part(name, g)
+            part.pose = pose(u, v, N, origin, -t / 2, t / 2)
             spot = g.buffer(-2.0)
             spot = spot.representative_point() if not spot.is_empty else g.representative_point()
             part.labels.append((np.array(spot.coords[0]), name, 3.0))
@@ -625,6 +659,8 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
             lost += 1
             continue
         part = Part(f"C{k + 1}", shape)
+        o, u, v = frames[k]
+        part.pose = pose(u, v, -normals[k], o, 0.0, thickness)  # el gruix creix cap endins
         size = float(np.clip(math.sqrt(shape.area) / 6, 2.0, 10.0))
         part.labels.append((np.array(shape.representative_point().coords[0]), f"C{k + 1}", size))
         plates[k] = part
@@ -652,6 +688,35 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
     # primer), després la resta.
     by_len = sorted(seams, key=lambda sm: -np.linalg.norm(sm.e1 - sm.e0))
 
+    def envelope(seam: Seam, s: float, leg: float):
+        """Tot el que pot ocupar el suport a la seva secció: l'arc amb tots els tenons i l'estel."""
+        shapes = [bracket_shape(seam, thickness, s, leg)]
+        if joint == "encaix":
+            spans = tenon_spans(s, leg, thickness)
+            shapes.append(arch_bracket(seam, thickness, s, leg, spans, spans))
+        shapes = [g for g in shapes if g is not None]
+        return unary_union(shapes) if shapes else None
+
+    def body(seam: Seam, c, env):
+        """El suport en 3D (amb 0,3 mm de marge pels costats), per veure si xoca."""
+        d3 = (seam.e1 - seam.e0) / np.linalg.norm(seam.e1 - seam.e0)
+        return solid(env, pose(seam.a, -seam.np_, d3, c, 0, 0)[0], -thickness / 2 - 0.3,
+                     thickness / 2 + 0.3)
+
+    plate_solids: dict[int, tuple] = {}
+
+    def plate_solid(k: int):
+        shape = plates[k].shape
+        if k not in plate_solids or plate_solids[k][0] is not shape:
+            o, u, v = frames[k]
+            plate_solids[k] = (shape, solid(shape, pose(u, v, -normals[k], o, 0, 0)[0], 0.0, thickness))
+        return plate_solids[k][1]
+
+    def clash(a, b) -> bool:
+        if a is None or b is None or np.any(a.bounds[0] > b.bounds[1]) or np.any(b.bounds[0] > a.bounds[1]):
+            return False
+        return trimesh.boolean.intersection([a, b], engine="manifold").volume > 0.05
+
     def plan(footprints: dict[int, list], parent: list[int], planes) -> list:
         """Tria on va cada suport: llargada del braç i posicions al llarg de l'aresta.
 
@@ -675,6 +740,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                 rest.append(sm)
         parent[:] = tmp  # ara només compten les unions que de debò porten suport (o costella)
         plans = []
+        bodies = []  # suports ja posats, en 3D
         for seam in tree + rest:
             L = float(np.linalg.norm(seam.e1 - seam.e0))
             s = seam.inset + gap / 2
@@ -688,6 +754,8 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                 if L < thickness + 1.0:
                     break
                 rough = bracket_shape(seam, thickness, s, cand) if planes else None
+                env = envelope(seam, s, cand)
+                others = [plate_solid(k) for k in plates if k not in (seam.p, seam.q)]
                 for shift in (0.0, -0.2, 0.2, -0.35, 0.35):
                     fr = [float(np.clip((i + 0.5 + shift) / count, 0.12, 0.88)) for i in range(count)]
                     cs = [seam.e0 + d3 * L * x for x in fr]
@@ -700,6 +768,11 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                     # Els suports deixen pas a les costelles (mitja fusta); si no es pot, l'esquiven.
                     if rough is not None and any(laps(c, seam, rough, planes) is None for c in cs):
                         continue
+                    # Dins del model, l'arc no pot tocar cap altre suport ni cap altra placa
+                    # (als vèrtexs on es troben moltes plaques, com la punta d'un con).
+                    news = [body(seam, c, env) for c in cs] if env is not None else []
+                    if any(clash(nb, o) for nb in news for o in bodies + others):
+                        continue
                     leg, centers = cand, cs
                     break
                 if leg is not None:
@@ -708,6 +781,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                 continue
             for k in (seam.p, seam.q):
                 footprints[k] += [footprint(k, seam, c, s, leg) for c in centers]
+            bodies += news
             parent[find(seam.p)] = find(seam.q)
             plans.append((seam, s, leg, centers))
         return plans
@@ -727,7 +801,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
         rib_data = ([], 0, [], {}, [])
         if ribs_on and len(set(groups_of(trial).values())) > 1:
             # 2) Costelles per a aquests grups, amb les plaques encara lliures de suports.
-            rib_data = add_ribs(m, plate_of, plates, normals, to2d, trial[:], thickness)
+            rib_data = add_ribs(m, plate_of, plates, normals, to2d, trial[:], thickness, plate_solid)
         ribs_, rib_slots_, planes_, cuts_, links_ = rib_data
         # 3) Suports que esquiven les ranures i el gruix de les costelles.
         parent_ = list(range(n_plates))
@@ -821,6 +895,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                     rib_part.shape = rib_part.shape.difference(notch)
                 laps_made[0] += len(lap[0])
             part = Part(f"S{seam.number}.{i + 1}", own)
+            part.pose = pose(seam.a, -seam.np_, d3, c, -thickness / 2, thickness / 2)
             spot = own.buffer(-1.2)
             spot = spot.representative_point() if not spot.is_empty else own.representative_point()
             part.labels.append((np.array(spot.coords[0]), f"a{seam.number}", 2.5))
@@ -832,6 +907,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
 
     # Les marques van a la cara interior, que queda amunt en tallar: vista des de dins. Les
     # plaques amb gravat decoratiu es tallen amb la cara de fora amunt (marques de referència).
+    assembly = placed(parts)  # abans de girar-les per a la planxa
     for k, part in plates.items():
         if k in face_up:
             part.to_guides()
@@ -859,7 +935,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
              + (": els tenons entren a les ranures." if joint == "encaix" else ", enganxat.")]
     res = LaserResult(svgs, parts, stats, notes, groups)
     # Per a vistes i diagnosi: a quina placa va cada cara i a quin grup de plaques unides.
-    res.extra = dict(mesh=m, plate_of=plate_of,
+    res.extra = dict(mesh=m, plate_of=plate_of, assembly=assembly,
                      group={k: find(k) for k in range(n_plates)},
                      supports={k: sum(1 for fp in footprints[k]) for k in range(n_plates)})
     return res
