@@ -24,7 +24,9 @@ def overlaps(solids, tol=0.05):
         for b in solids[i + 1:]:
             if np.any(a.mesh.bounds[0] > b.mesh.bounds[1]) or np.any(b.mesh.bounds[0] > a.mesh.bounds[1]):
                 continue
-            v = trimesh.boolean.intersection([a.mesh, b.mesh], engine="manifold").volume
+            inter = trimesh.boolean.intersection([a.mesh, b.mesh], engine="manifold")
+            with np.errstate(divide="ignore", invalid="ignore"):  # contacte sense volum
+                v = 0.0 if inter.is_empty else inter.volume
             if v > tol:
                 out.append((a.kind, b.kind, round(float(v), 2)))
     return out

@@ -212,6 +212,9 @@ def arch_bracket(seam: Seam, t: float, s: float, length: float,
 
 RIB_MAX = 12          # costelles màximes
 RIB_MIN_SIN = 0.3     # una placa gairebé paral·lela al pla de la costella no hi encaixa
+RIB_AXES = 6          # eixos de grups solts que es proven (a més de x, y, z), els més grans
+RIB_HEIGHTS = 20      # alçades que es proven per a cada direcció
+RIB_SECONDS = 10.0    # temps màxim de la cerca de costelles: amb molts grups solts, s'atura
 
 
 def half_lap(c: np.ndarray, seam: Seam, shape: Polygon, plane, t: float):
@@ -417,10 +420,14 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, so
             x = parent[x]
         return x
 
+    import time
+    deadline = time.monotonic() + RIB_SECONDS
     ribs: list[Part] = []
     n_slots = 0
     planes, cuts, links = [], {}, []
     for _ in range(RIB_MAX):
+        if time.monotonic() > deadline:
+            break
         groups: dict[int, list[int]] = {}
         for k in plates:
             groups.setdefault(find(k), []).append(k)
@@ -428,9 +435,9 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, so
             break
         main = max(groups, key=lambda g: len(groups[g]))
         normals_c, offsets = [np.eye(3)[i] for i in range(3)], []
-        for gid, ks in groups.items():
-            if gid == main:
-                continue
+        loose = sorted((g for g in groups if g != main), key=lambda g: -len(groups[g]))
+        for gid in loose[:RIB_AXES]:
+            ks = groups[gid]
             fs = np.isin(plate_of, ks)
             ns = m.face_normals[fs]
             axis = np.linalg.svd(ns, full_matrices=False)[2][-1]
@@ -442,7 +449,12 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, so
             for pts in offsets:
                 h = pts @ N
                 heights |= {round(float(x), 3) for x in np.linspace(h.min(), h.max(), 16)[1:-1]}
-            for hgt in sorted(heights):
+            heights = sorted(heights)
+            if len(heights) > RIB_HEIGHTS:  # molts grups: una mostra repartida
+                heights = [heights[i] for i in np.linspace(0, len(heights) - 1, RIB_HEIGHTS).astype(int)]
+            for hgt in heights:
+                if time.monotonic() > deadline:
+                    break
                 origin = N * hgt
                 cand = rib_candidate(m, plate_of, plates, normals, to2d, origin, N, t)
                 if cand is None:
@@ -712,10 +724,25 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
             plate_solids[k] = (shape, solid(shape, pose(u, v, -normals[k], o, 0, 0)[0], 0.0, thickness))
         return plate_solids[k][1]
 
+    def near(a, objs: list) -> list:
+        """Els objectes la capsa dels quals toca la d'`a` (filtre ràpid abans de l'operació 3D)."""
+        objs = [o for o in objs if o is not None]
+        if a is None or not objs:
+            return []
+        B = np.array([o.bounds for o in objs])
+        ok = np.all(B[:, 0] <= a.bounds[1], axis=1) & np.all(B[:, 1] >= a.bounds[0], axis=1)
+        return [o for o, k in zip(objs, ok) if k]
+
     def clash(a, b) -> bool:
-        if a is None or b is None or np.any(a.bounds[0] > b.bounds[1]) or np.any(b.bounds[0] > a.bounds[1]):
+        if a is None or b is None:
             return False
-        return trimesh.boolean.intersection([a, b], engine="manifold").volume > 0.05
+        inter = trimesh.boolean.intersection([a, b], engine="manifold")
+        if inter.is_empty:
+            return False
+        # Si només es toquen per una cara, la intersecció no té volum i trimesh avisaria
+        # (divisió per zero en calcular el centre de massa).
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return inter.volume > 0.05
 
     def plan(footprints: dict[int, list], parent: list[int], planes) -> list:
         """Tria on va cada suport: llargada del braç i posicions al llarg de l'aresta.
@@ -754,8 +781,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                 if L < thickness + 1.0:
                     break
                 rough = bracket_shape(seam, thickness, s, cand) if planes else None
-                env = envelope(seam, s, cand)
-                others = [plate_solid(k) for k in plates if k not in (seam.p, seam.q)]
+                env = others = None  # només si el suport cap a les plaques (és car)
                 for shift in (0.0, -0.2, 0.2, -0.35, 0.35):
                     fr = [float(np.clip((i + 0.5 + shift) / count, 0.12, 0.88)) for i in range(count)]
                     cs = [seam.e0 + d3 * L * x for x in fr]
@@ -770,8 +796,11 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                         continue
                     # Dins del model, l'arc no pot tocar cap altre suport ni cap altra placa
                     # (als vèrtexs on es troben moltes plaques, com la punta d'un con).
+                    if others is None:
+                        env = envelope(seam, s, cand)
+                        others = [plate_solid(k) for k in plates if k not in (seam.p, seam.q)]
                     news = [body(seam, c, env) for c in cs] if env is not None else []
-                    if any(clash(nb, o) for nb in news for o in bodies + others):
+                    if any(clash(nb, o) for nb in news for o in near(nb, bodies + others)):
                         continue
                     leg, centers = cand, cs
                     break
