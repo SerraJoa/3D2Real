@@ -28,17 +28,24 @@ COLUMN_SEP = 2.0      # separació mínima entre centres de columnes, en diàmet
 COLUMNS_PER_PIECE = 2
 
 
-def slice_at(mesh: trimesh.Trimesh, z: float):
-    """Secció de la malla al pla horitzontal z, com a (Multi)Polygon amb forats."""
-    segs = trimesh.intersections.mesh_plane(mesh, [0, 0, 1], [0, 0, z])
-    if len(segs) == 0:
+def section_polygon(segments2d) -> Polygon:
+    """Polígon (amb forats, parell/senar) que tanquen uns segments 2D d'una secció."""
+    lines = [LineString(np.round(s, 6)) for s in segments2d if np.linalg.norm(s[0] - s[1]) > 1e-9]
+    if not lines:
         return Polygon()
-    lines = [LineString(np.round(s[:, :2], 6)) for s in segs if np.linalg.norm(s[0] - s[1]) > 1e-9]
     faces = list(polygonize(unary_union(lines)))
     geom = Polygon()
     for f in faces:  # parell/senar: un anell dins d'un altre és un forat
         geom = geom.symmetric_difference(Polygon(f.exterior))
     return geom.buffer(0)
+
+
+def slice_at(mesh: trimesh.Trimesh, z: float):
+    """Secció de la malla al pla horitzontal z, com a (Multi)Polygon amb forats."""
+    segs = trimesh.intersections.mesh_plane(mesh, [0, 0, 1], [0, 0, z])
+    if len(segs) == 0:
+        return Polygon()
+    return section_polygon([s[:, :2] for s in segs])
 
 
 def _islands(geom) -> list[Polygon]:

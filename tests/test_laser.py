@@ -159,3 +159,21 @@ def test_esfera_marca_el_solapament_a_les_dues_meitats():
 def test_llista_de_tiges(capes):
     assert any("columna 1" in n for n in capes.notes)
     assert any("llargada 30 mm" in n for n in capes.notes)
+
+
+def _coet():
+    return trimesh.creation.revolve(np.array([[0, 0], [10, 0], [10, 40], [0, 60]]), sections=16)
+
+
+def test_costella_uneix_la_punta_del_coet():
+    # Els 16 triangles de la punta són massa estrets per a suports entre veïns: una sola
+    # costella perpendicular a l'eix els uneix tots al cos.
+    r = cares.make_faces(_coet(), 400, 120, 3.0, 0.0)
+    assert r.stats["grups_de_plaques"] == 1
+    assert 1 <= r.stats["costelles"] <= 2
+    rib = next(p for p in r.parts if p.name.startswith("K"))
+    assert rib.shape.is_valid
+
+
+def test_sense_problemes_no_hi_ha_costelles(caixa):
+    assert caixa.stats["costelles"] == 0

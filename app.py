@@ -97,7 +97,15 @@ if uploaded:
                 if r:
                     s = r.stats
                     st.success(f"{s['plaques']} plaques · {s['suports']} suports · "
-                               f"{s['ranures']} ranures · {s['planxes']} planxes")
+                               f"{s['costelles']} costelles · {s['ranures']} ranures · "
+                               f"{s['planxes']} planxes")
+                    import vista
+                    st.markdown("**Grups de plaques** (un color per grup unit; vora negra = placa "
+                                "sense cap suport)")
+                    v = vista.plates_view(r, width=260, yaw=25, pitch=25)
+                    st.markdown(f'<img src="data:image/svg+xml;base64,'
+                                f'{base64.b64encode(v.encode()).decode()}"/>',
+                                unsafe_allow_html=True)
                     if s["grups_de_plaques"] > 1:
                         st.warning(f"Les plaques queden en {s['grups_de_plaques']} grups sense "
                                    "suport entre ells: hi ha plaques massa petites per a suports.")

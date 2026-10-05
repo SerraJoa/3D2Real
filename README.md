@@ -62,7 +62,13 @@ streamlit run app.py
   tenons travessen la placa: es veuen com a petits rectangles a fora.
 - **Suports enganxats**: un estel per dins, del tot invisible.
 - Primer es posen els suports que uneixen totes les plaques (arbre, arestes llargues
-  primer); cada suport es mou al llarg de l'aresta o s'escurça fins que no en toca cap altre.
+  primer); cada suport es mou al llarg de l'aresta o s'escurça fins que cap dins les dues
+  plaques i no en toca cap altre.
+- **Costelles interiors**: si hi ha plaques massa estretes per a suports (la punta d'un con),
+  el grup es tanca amb una costella: la secció del model en un pla, menys el gruix de les
+  plaques i buidada per dins, amb un tenó a cada placa que travessa. Es tria el pla que
+  uneix més grups (i, a igualtat, la costella més petita); els suports s'hi adapten. Si les
+  costelles no milloren el resultat, no se'n posen.
 - Gravat a la cara interior (la que queda amunt en tallar): número de placa, número
   d'aresta i on va cada suport.
 
