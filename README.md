@@ -19,6 +19,11 @@ streamlit run app.py
      escletxes on no es pot enganxar res;
    - si en tancar el ventall d'un vèrtex les dues vores coincideixen, l'aresta es plega.
 3. **Reenganxa** les peces molt petites a una veïna quan encara hi ha lloc per a pestanyes.
+   **Línies naturals** (opcional, per defecte 40° a la interfície): primer es parteix la
+   superfície per les arestes que pleguen més que l'angle triat, cada zona es desplega per
+   separat (les zones de menys del 2 % de l'àrea s'uneixen a una veïna) i després les peces
+   es tornen a unir per aquestes línies mentre hi càpiguen, no s'escampin i quedi lloc per
+   a les pestanyes. Així, quan cal tallar, es talla per les línies del model.
 4. **Pestanyes**: un trapezi a un dels dos costats de cada costura. Els trossos d'una
    mateixa aresta comparteixen número. Si una pestanya topa:
    - només amb altres pestanyes i poc (≤35 % de l'àrea) → s'encongeix una mica;
@@ -40,9 +45,12 @@ streamlit run app.py
 
 ## Limitacions
 
-En superfícies corbes (esferes), tancar del tot el ventall d'un vèrtex deixa una escletxa
-massa estreta per a una pestanya. En aquests casos el desplegable prefereix deixar un
-triangle solt amb pestanyes: més peces, però totes es poden muntar.
+- En superfícies corbes sense línies marcades (esferes), tancar del tot el ventall d'un
+  vèrtex deixa una escletxa massa estreta per a una pestanya. El desplegable prefereix
+  deixar un triangle solt amb pestanyes: més peces, però totes es poden muntar.
+- La col·locació a la pàgina fa servir capses rectangulars: peces corbes i llargues
+  (anelles d'un tor) aprofiten poc el paper.
+- Una peça unida pot quedar amb forats interiors, que s'han de retallar per dins.
 
 ## Tests
 

@@ -23,17 +23,22 @@ if uploaded:
             landscape = st.checkbox("Apaïsat")
         with c3:
             tab = st.slider("Amplada de pestanyes (mm)", 2.0, 12.0, 5.0, 0.5)
+            lines = st.slider("Línies naturals — angle mínim (°)", 0, 90, 40, 5,
+                              help="Les peces es tallen per les arestes que pleguen més d'aquest "
+                                   "angle i després es tornen a unir mentre hi càpiguen. "
+                                   "0 = no fer servir línies naturals.")
             face_numbers = st.checkbox("Numerar les cares")
 
         if st.button("🚀 Generar desplegable", type="primary"):
             with st.spinner("Desplegant…"):
                 st.session_state["result"] = pc.make_papercraft(
-                    mesh, target, size, tab, page, landscape, face_numbers)
+                    mesh, target, size, tab, page, landscape, face_numbers, lines)
 
         r = st.session_state.get("result")
         if r:
             s = r.stats
-            st.success(f"{r.faces} cares · {s['peces']} peces · {s['pagines']} pàgines · "
+            st.success(f"{r.faces} cares · {s['zones']} zones naturals · {s['peces']} peces · "
+                       f"{s['pagines']} pàgines · "
                        f"{s['costures']} costures · {s['pestanyes']} pestanyes")
             st.caption(f"Pestanyes: {s['pestanyes_encongides']} encongides, "
                        f"{s['pestanyes_dentades']} dentades, "

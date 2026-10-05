@@ -225,8 +225,11 @@ COMPACT = 0.05
 FOLD_SNAP = 0.3
 
 
-def flat_patches(mesh: trimesh.Trimesh, em) -> np.ndarray:
-    """Agrupa les cares coplanars connectades: cada grup es desplega sencer o gens."""
+def flat_patches(mesh: trimesh.Trimesh, em, region: np.ndarray | None = None) -> np.ndarray:
+    """Agrupa les cares coplanars connectades: cada grup es desplega sencer o gens.
+
+    Amb `region`, dues cares de regions diferents mai no van al mateix grup.
+    """
     parent = list(range(len(mesh.faces)))
 
     def find(x: int) -> int:
@@ -236,13 +239,15 @@ def flat_patches(mesh: trimesh.Trimesh, em) -> np.ndarray:
         return x
 
     for fs in em.values():
-        if len(fs) == 2 and fold_kind(mesh, fs[0], fs[1]) == "pla":
+        if len(fs) == 2 and fold_kind(mesh, fs[0], fs[1]) == "pla" and (
+                region is None or region[fs[0]] == region[fs[1]]):
             parent[find(fs[0])] = find(fs[1])
     return np.array([find(i) for i in range(len(mesh.faces))])
 
 
 def unfold(mesh: trimesh.Trimesh, max_size: tuple[float, float] | None = None,
-           tab_mm: float = 0.0) -> tuple[list[Piece], np.ndarray]:
+           tab_mm: float = 0.0, region: np.ndarray | None = None
+           ) -> tuple[list[Piece], np.ndarray]:
     """Desplega la malla en peces sense solapaments.
 
     Cada peça creix des de la zona plana més gran que queda lliure. Primer s'hi
@@ -253,16 +258,19 @@ def unfold(mesh: trimesh.Trimesh, max_size: tuple[float, float] | None = None,
 
     Amb `tab_mm` > 0 es reserva, a cada aresta lliure, l'espai d'una pestanya: cap
     cara nova no hi pot caure. Així no es formen escletxes sense lloc per enganxar.
+
+    Amb `region` (una etiqueta per cara), les arestes entre regions diferents sempre
+    són costures: cada peça queda dins d'una sola regió.
     """
     V, F, N = mesh.vertices, mesh.faces, mesh.face_normals
     em = edge_faces(F)
-    patch = flat_patches(mesh, em)
+    patch = flat_patches(mesh, em, region)
     members: dict[int, list[int]] = {}
     for fi, pid in enumerate(patch):
         members.setdefault(int(pid), []).append(fi)
     neigh: list[list[tuple[float, int, tuple[int, int]]]] = [[] for _ in F]
     for e, fs in em.items():
-        if len(fs) == 2:
+        if len(fs) == 2 and (region is None or region[fs[0]] == region[fs[1]]):
             a, b = fs
             w = float(np.arccos(np.clip(np.dot(N[a], N[b]), -1.0, 1.0)))
             neigh[a].append((w, b, e))
@@ -408,7 +416,7 @@ SMALL_PIECE = 3  # peces amb aquestes cares o menys s'intenten reenganxar a una 
 
 def absorb_small(mesh: trimesh.Trimesh, pieces: list[Piece], owner: np.ndarray,
                  max_size: tuple[float, float] | None = None, tab_mm: float = 5.0,
-                 small: int = SMALL_PIECE) -> tuple[list[Piece], np.ndarray]:
+                 small: int = SMALL_PIECE, region: np.ndarray | None = None) -> tuple[list[Piece], np.ndarray]:
     """Enganxa les cares de peces molt petites a una peça veïna si no s'hi solapen.
 
     Les cares que tanquen el ventall d'un vèrtex corbat no tenen lloc per a una pestanya
@@ -432,6 +440,8 @@ def absorb_small(mesh: trimesh.Trimesh, pieces: list[Piece], owner: np.ndarray,
                     for g in em[e]:
                         q = owner[g]
                         if g == fi or q == idx or len(pieces[q].tris) <= len(p.tris):
+                            continue
+                        if region is not None and region[g] != region[fi]:
                             continue
                         Q = pieces[q]
                         cc = _child_coords(V, F, g, Q.tris[g], fi, e)
@@ -462,6 +472,180 @@ def absorb_small(mesh: trimesh.Trimesh, pieces: list[Piece], owner: np.ndarray,
             p.shapes, p.shape_of = _Shapes(), {}
             for fi, t in list(p.tris.items()):
                 p.shape_of[fi] = p.shapes.add(Polygon(t))
+    keep = [i for i, p in enumerate(pieces) if p.tris]
+    remap = {old: new for new, old in enumerate(keep)}
+    return [pieces[i] for i in keep], np.array([remap[o] for o in owner])
+
+
+# ---------------------------------------------------------------- zones naturals
+
+ZONE_MIN_SHARE = 0.02  # zones amb menys d'aquesta fracció de l'àrea s'uneixen a una veïna
+
+
+def _dihedral(mesh: trimesh.Trimesh, a: int, b: int) -> float:
+    n = mesh.face_normals
+    return float(np.degrees(np.arccos(np.clip(np.dot(n[a], n[b]), -1.0, 1.0))))
+
+
+def natural_zones(mesh: trimesh.Trimesh, angle_deg: float,
+                  min_share: float = ZONE_MIN_SHARE) -> np.ndarray:
+    """Parteix la superfície per les línies naturals: arestes que pleguen més de `angle_deg`.
+
+    Retorna una etiqueta per cara. Les zones molt petites s'uneixen a la veïna amb qui
+    comparteixen més vora, perquè no surtin peces minúscules.
+    """
+    em = edge_faces(mesh.faces)
+    parent = list(range(len(mesh.faces)))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    lines = []
+    for e, fs in em.items():
+        if len(fs) != 2:
+            continue
+        if _dihedral(mesh, fs[0], fs[1]) < angle_deg:
+            parent[find(fs[0])] = find(fs[1])
+        else:
+            lines.append((e, fs[0], fs[1]))
+
+    area = mesh.area_faces
+    total = float(area.sum())
+    length = {e: float(np.linalg.norm(mesh.vertices[e[0]] - mesh.vertices[e[1]])) for e, _, _ in lines}
+    while True:
+        zone = np.array([find(i) for i in range(len(parent))])
+        z_area = {}
+        for fi, z in enumerate(zone):
+            z_area[z] = z_area.get(z, 0.0) + area[fi]
+        small = [z for z, a in z_area.items() if a < min_share * total]
+        if not small or len(z_area) == 1:
+            break
+        z = min(small, key=lambda k: z_area[k])
+        border: dict[int, float] = {}
+        for e, a, b in lines:
+            za, zb = zone[a], zone[b]
+            if za != zb and z in (za, zb):
+                other = zb if za == z else za
+                border[other] = border.get(other, 0.0) + length[e]
+        if not border:  # zona aïllada (una altra component): la deixem
+            parent[z] = z
+            min_share = min(min_share, z_area[z] / total)
+            continue
+        parent[find(z)] = find(max(border, key=border.get))
+    _, labels = np.unique(zone, return_inverse=True)
+    return labels
+
+
+def _rigid(src: np.ndarray, dst: np.ndarray):
+    """Gir i translació (sense mirall) que porta els punts `src` sobre `dst`."""
+    cs, cd = src.mean(0), dst.mean(0)
+    H = (src - cs).T @ (dst - cd)
+    U, _, Vt = np.linalg.svd(H)
+    R = Vt.T @ U.T
+    if np.linalg.det(R) < 0:
+        Vt[-1] *= -1
+        R = Vt.T @ U.T
+    return lambda x: (x - cs) @ R.T + cd
+
+
+# Dues peces només s'uneixen si el casc convex de la unió no supera aquest factor
+# per la suma dels seus cascos: evita peces escampades que omplen pàgines de buit.
+MERGE_SPREAD = 2.0
+# Per sota d'aquesta fracció de l'àrea imprimible, la unió no es considera escampada.
+MERGE_FREE = 0.25
+
+
+def _hull_area(pts: np.ndarray) -> float:
+    return MultiPoint([tuple(p) for p in pts]).convex_hull.area
+
+
+def merge_pieces(mesh: trimesh.Trimesh, pieces: list[Piece], owner: np.ndarray,
+                 max_size: tuple[float, float] | None, tab_mm: float
+                 ) -> tuple[list[Piece], np.ndarray]:
+    """Torna a enganxar peces senceres entre elles per una costura, si encara hi caben.
+
+    Prova primer les costures més planes. Una peça només s'enganxa a una altra si no s'hi
+    solapa, la peça resultant cap al paper sense escampar-se massa (`MERGE_SPREAD`) i
+    cada costura que queda tapada encara té lloc per a una pestanya.
+    """
+    V, F = mesh.vertices, mesh.faces
+    em = edge_faces(F)
+    changed = True
+    while changed:
+        changed = False
+        cands = []
+        for e, fs in em.items():
+            if len(fs) == 2 and owner[fs[0]] != owner[fs[1]]:
+                cands.append((_dihedral(mesh, *fs), e, fs[0], fs[1]))
+        cands.sort(key=lambda c: c[0])
+        for _, e, a, b in cands:
+            P, Q = pieces[owner[a]], pieces[owner[b]]
+            if len(P.tris) < len(Q.tris):
+                a, b, P, Q = b, a, Q, P
+            target = _child_coords(V, F, a, P.tris[a], b, e)
+            if target is None:
+                continue
+            move = _rigid(Q.tris[b], target)
+            moved = {fi: move(t) for fi, t in Q.tris.items()}
+            pts = np.vstack(list(P.tris.values()) + list(moved.values()))
+            if max_size is not None and _fit_angle(pts, *max_size) is None:
+                continue
+            hull = _hull_area(pts)
+            if max_size is not None and hull > MERGE_FREE * max_size[0] * max_size[1] and \
+                    hull > MERGE_SPREAD * (_hull_area(np.vstack(list(P.tris.values())))
+                                           + _hull_area(np.vstack(list(moved.values())))):
+                continue  # la peça unida s'escamparia (una X, una L llarga) i gastaria paper
+            polys = {fi: Polygon(t) for fi, t in moved.items()}
+            if any(P.shapes.hits(pl) for pl in polys.values()):
+                continue
+
+            # Arestes entre P i Q que ara coincideixen: també es pleguen.
+            joined = {e: fold_kind(mesh, a, b)}
+            for fi, t in moved.items():
+                g = [int(x) for x in F[fi]]
+                for i in range(3):
+                    e2 = tuple(sorted((g[i], g[(i + 1) % 3])))
+                    h = next((x for x in em[e2] if x != fi), None)
+                    if h is None or h not in P.tris or e2 in joined:
+                        continue
+                    f = [int(x) for x in F[h]]
+                    if all(np.linalg.norm(t[g.index(v)] - P.tris[h][f.index(v)]) <= FOLD_SNAP
+                           for v in e2):
+                        joined[e2] = fold_kind(mesh, h, fi)
+
+            merged = Piece(tris={**P.tris, **moved})
+            for fi, t in merged.tris.items():
+                merged.shape_of[fi] = merged.shapes.add(polys.get(fi) or Polygon(t))
+            folds = {**P.folds, **Q.folds, **joined}
+            ok = True
+            for fi, t in merged.tris.items():  # cada costura ha de poder dur pestanya
+                g = [int(x) for x in F[fi]]
+                for i in range(3):
+                    e2 = tuple(sorted((g[i], g[(i + 1) % 3])))
+                    if e2 in folds or len(em[e2]) != 2:
+                        continue
+                    h = next(x for x in em[e2] if x != fi)
+                    if h not in merged.tris or h < fi:  # l'altra peça, o ja comprovada
+                        continue
+                    if fit_tab(merged, fi, *_edge_in_face(F, fi, t, e2), tab_mm) is None and \
+                            fit_tab(merged, h, *_edge_in_face(F, h, merged.tris[h], e2), tab_mm) is None:
+                        ok = False
+                        break
+                if not ok:
+                    break
+            if not ok:
+                continue
+            merged.folds = folds
+            q_idx = owner[b]
+            pieces[owner[a]] = merged
+            for fi in Q.tris:
+                owner[fi] = owner[a]
+            pieces[q_idx] = Piece()
+            changed = True
+            break
     keep = [i for i, p in enumerate(pieces) if p.tris]
     remap = {old: new for new, old in enumerate(keep)}
     return [pieces[i] for i in keep], np.array([remap[o] for o in owner])
@@ -769,22 +953,37 @@ def add_tabs_and_lines(mesh: trimesh.Trimesh, pieces: list[Piece], owner: np.nda
 
 # ---------------------------------------------------------------- pàgines
 
-def _best_rotation(pts: np.ndarray) -> float:
-    """Angle que minimitza l'àrea de la capsa alineada (provant cada aresta del casc convex)."""
+def _rotations(pts: np.ndarray) -> list[tuple[float, float, float]]:
+    """(angle, amplada, alçada) girant perquè cada aresta del casc convex quedi horitzontal.
+
+    Ordenades de menys a més àrea de capsa; una d'aquestes és sempre la capsa mínima.
+    """
     hull = MultiPoint([tuple(p) for p in pts]).convex_hull
     if hull.geom_type != "Polygon":
-        return 0.0
+        return [(0.0, float(np.ptp(pts[:, 0])), float(np.ptp(pts[:, 1])))]
     ring = np.array(hull.exterior.coords)
-    best, best_area = 0.0, math.inf
+    out = []
     for p, q in zip(ring[:-1], ring[1:]):
         ang = -math.atan2(q[1] - p[1], q[0] - p[0])
         c, s = math.cos(ang), math.sin(ang)
         r = ring @ np.array([[c, s], [-s, c]])
-        w, h = np.ptp(r[:, 0]), np.ptp(r[:, 1])
-        area = w * h
-        if area < best_area - 1e-9 or (abs(area - best_area) <= 1e-9 and w > h):
-            best, best_area = ang, area
-    return best
+        out.append((ang, float(np.ptp(r[:, 0])), float(np.ptp(r[:, 1]))))
+    out.append((0.0, float(np.ptp(ring[:, 0])), float(np.ptp(ring[:, 1]))))
+    out.sort(key=lambda t: (round(t[1] * t[2], 9), -t[1]))
+    return out
+
+
+def _fit_angle(pts: np.ndarray, W: float, H: float) -> float | None:
+    """Angle (el de menys àrea) amb què la peça cap en W×H, girada 90° o no; None si no hi cap."""
+    for ang, w, h in _rotations(pts):
+        if (w <= W and h <= H) or (h <= W and w <= H):
+            return ang
+    return None
+
+
+def _best_rotation(pts: np.ndarray) -> float:
+    """Angle que minimitza l'àrea de la capsa alineada."""
+    return _rotations(pts)[0][0]
 
 
 @dataclass
@@ -794,7 +993,7 @@ class Page:
 
 def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGIN,
            gap: float = 4.0) -> tuple[list[Page], int]:
-    """Gira cada peça a la capsa mínima i les col·loca en prestatges per pàgines.
+    """Gira cada peça a la capsa mínima que hi cap i les col·loca en prestatges per pàgines.
 
     Converteix les coordenades a l'eix y cap avall de l'SVG fent una simetria
     (així el que es veu és la cara exterior). Retorna també quantes peces no
@@ -805,13 +1004,12 @@ def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGI
     for p in pieces:
         pts = p.points()
         # Capsa mínima primer; si no hi cap, el marc del desplegament (que sí que hi cap).
-        for ang in (_best_rotation(pts), 0.0):
-            c, s = math.cos(ang), math.sin(ang)
-            R = np.array([[c, s], [-s, c]]) @ np.diag([1.0, -1.0])
-            r = pts @ R
-            w, h = np.ptp(r[:, 0]), np.ptp(r[:, 1])
-            if (w <= W and h <= H) or (h <= W and w <= H):
-                break
+        ang = _fit_angle(pts, W, H)
+        ang = _best_rotation(pts) if ang is None else ang
+        c, s = math.cos(ang), math.sin(ang)
+        R = np.array([[c, s], [-s, c]]) @ np.diag([1.0, -1.0])
+        r = pts @ R
+        w, h = np.ptp(r[:, 0]), np.ptp(r[:, 1])
         p.transform(lambda x, R=R: x @ R)
         if w > W and h <= W and w <= H:  # girar 90° si així hi cap
             p.transform(lambda x: np.column_stack([-x[:, 1], x[:, 0]]))
@@ -902,14 +1100,25 @@ class Result:
 
 def make_papercraft(mesh: trimesh.Trimesh, target_faces: int, size_mm: float,
                     tab_mm: float = 5.0, page: str = "A4", landscape: bool = False,
-                    face_numbers: bool = False) -> Result:
+                    face_numbers: bool = False, lines_deg: float = 0.0) -> Result:
+    """Desplega la malla i la posa en pàgines.
+
+    Amb `lines_deg` > 0, primer parteix per les línies naturals (arestes que pleguen més
+    d'aquest angle), desplega cada zona per separat i després torna a unir les peces per
+    aquestes línies mentre hi càpiguen. Així, quan cal tallar, es talla per les línies.
+    """
     m = scale_to(simplify(clean(mesh), target_faces), size_mm)
     size = PAGES[page][::-1] if landscape else PAGES[page]
     room = (size[0] - 2 * MARGIN - 2 * tab_mm, size[1] - 2 * MARGIN - 2 * tab_mm)
-    pieces, owner = unfold(m, room, tab_mm)
-    pieces, owner = absorb_small(m, pieces, owner, room, tab_mm)
+    zones = natural_zones(m, lines_deg) if lines_deg > 0 else None
+    pieces, owner = unfold(m, room, tab_mm, zones)
+    pieces, owner = absorb_small(m, pieces, owner, room, tab_mm, region=zones)
+    if zones is not None:
+        pieces, owner = merge_pieces(m, pieces, owner, room, tab_mm)
     stats = add_tabs_and_lines(m, pieces, owner, tab_mm)
     pages, oversize = layout(pieces, size)
-    stats.update(peces=len(pieces), pagines=len(pages), massa_grans=oversize)
+    stats.update(peces=len(pieces), pagines=len(pages), massa_grans=oversize,
+                 zones=int(zones.max()) + 1 if zones is not None else 1,
+                 peces_petites=sum(1 for p in pieces if len(p.tris) <= SMALL_PIECE))
     svgs = [page_svg(pg, size, i, len(pages), face_numbers) for i, pg in enumerate(pages, 1)]
     return Result(svgs, pieces, len(m.faces), stats)
