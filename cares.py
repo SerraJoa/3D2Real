@@ -15,6 +15,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+import shapely
 import trimesh
 from shapely.geometry import LineString, MultiPoint, Polygon
 from shapely.ops import unary_union
@@ -213,6 +214,92 @@ RIB_MAX = 12          # costelles màximes
 RIB_MIN_SIN = 0.3     # una placa gairebé paral·lela al pla de la costella no hi encaixa
 
 
+def half_lap(c: np.ndarray, seam: Seam, shape: Polygon, plane, t: float):
+    """Encaix a mitja fusta entre un suport (a `c`) i una costella que es creuen.
+
+    Retorna (osques del suport en coordenades de la seva secció, [(peça de costella, osca)]),
+    ([], []) si no es toquen, o None si no es pot fer (cap extrem del creuament queda a la
+    vora d'una peça i a la vora de l'altra).
+    """
+    origin, N, u, v, rib_parts = plane
+    d3 = (seam.e1 - seam.e0) / np.linalg.norm(seam.e1 - seam.e0)
+    X, Y = seam.a, -seam.np_
+    a, b, d0 = float(X @ N), float(Y @ N), float((c - origin) @ N)
+    ab = math.hypot(a, b)
+    rib = unary_union([p.shape for p in rib_parts])
+    pts3 = np.array([c + X * x + Y * y + d3 * z for x, y in np.array(shape.exterior.coords)
+                     for z in (-t / 2, t / 2)])
+    dist = (pts3 - origin) @ N
+    if dist.min() > t / 2 + SLOT_FIT or dist.max() < -t / 2 - SLOT_FIT:
+        return [], []
+    if ab < 0.2:  # plans gairebé paral·lels: no es poden creuar a mitja fusta
+        return None
+    # Línia on es tallen els plans mitjans, en coordenades de la secció del suport.
+    base = -d0 * np.array([a, b]) / ab ** 2
+    dirb = np.array([-b, a]) / ab
+    to3 = lambda q: c + X * q[0] + Y * q[1]
+    to_rib = lambda p: np.array([(p - origin) @ u, (p - origin) @ v])
+    far = 1000.0
+    line_b = LineString([base - dirb * far, base + dirb * far])
+    p_a, p_b = to3(base - dirb * far), to3(base + dirb * far)
+    line_r = LineString([to_rib(p_a), to_rib(p_b)])
+
+    # Amplades de les osques: el gruix de l'altra peça vist de biaix, amb joc.
+    sin = float(np.linalg.norm(np.cross(d3, N)))
+    if sin < 0.2:
+        return None
+    wb = (t / 2 + SLOT_FIT) / ab + (t / 2) * abs(float(d3 @ N)) / ab
+    wr = (t / 2 + SLOT_FIT) / sin + (t / 2) * abs(float(d3 @ N)) / sin
+
+    def spans(geom, line, half: float) -> list[tuple[float, float]]:
+        """Trams de la línia on la franja de l'osca (no només la línia) toca la peça."""
+        out = []
+        inter = geom.intersection(line.buffer(half, cap_style=2))
+        for g in getattr(inter, "geoms", [inter]):
+            if g.geom_type == "Polygon" and g.area > 1e-6:
+                ps = [line.project(shapely.geometry.Point(q)) for q in g.exterior.coords]
+                out.append((min(ps), max(ps)))
+        return out
+
+    sb, sr = spans(shape, line_b, wb), spans(rib, line_r, wr)
+    if not sb or not sr:
+        return [], []
+    nb = np.array([-dirb[1], dirb[0]])
+    r_dir = (to_rib(p_b) - to_rib(p_a)) / np.linalg.norm(to_rib(p_b) - to_rib(p_a))
+    nr = np.array([-r_dir[1], r_dir[0]])
+    notch_b, notch_r = [], []
+    for b0, b1 in sb:
+        for r0, r1 in sr:
+            lo, hi = max(b0, r0), min(b1, r1)
+            if hi - lo < 1e-6:
+                continue
+            mid = (lo + hi) / 2
+            # Cada osca ha de sortir a fora de la seva peça per un extrem (si no, seria un
+            # forat tancat i no es podrien encaixar).
+            at_b = lambda d: base - dirb * far + dirb * d
+            at_r = lambda d: to_rib(p_a) + r_dir * d
+            out_b = lambda d: not shape.buffer(-1e-3).contains(shapely.geometry.Point(at_b(d)))
+            out_r = lambda d: not rib.buffer(-1e-3).contains(shapely.geometry.Point(at_r(d)))
+            if out_b(lo - 0.5) and out_r(hi + 0.5):    # suport osca pel principi, costella pel final
+                fb, fr = (lo - 1.0, mid), (mid, hi + 1.0)
+            elif out_b(hi + 0.5) and out_r(lo - 0.5):
+                fb, fr = (mid, hi + 1.0), (lo - 1.0, mid)
+            else:
+                return None
+            pb0, pb1 = base - dirb * far + dirb * fb[0], base - dirb * far + dirb * fb[1]
+            notch_b.append(Polygon([pb0 - nb * wb, pb1 - nb * wb, pb1 + nb * wb, pb0 + nb * wb]))
+            pr0, pr1 = to_rib(p_a) + r_dir * fr[0], to_rib(p_a) + r_dir * fr[1]
+            notch_r.append(Polygon([pr0 - nr * wr, pr1 - nr * wr, pr1 + nr * wr, pr0 + nr * wr]))
+    if not notch_b:
+        return [], []
+    hits = []
+    for n_ in notch_r:
+        for p in rib_parts:
+            if p.shape.intersects(n_):
+                hits.append((p, n_))
+    return notch_b, hits
+
+
 def _plane_basis(N: np.ndarray):
     hint = np.array([1.0, 0, 0]) if abs(N[0]) < 0.9 else np.array([0, 1.0, 0])
     return _basis(N, hint)
@@ -349,7 +436,8 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float):
             break
         N, origin, comps, slots = best
         u, v = _plane_basis(N)
-        planes.append((origin, N, u, v, unary_union([g for g, _ in comps])))
+        plane_parts: list[Part] = []
+        planes.append((origin, N, u, v, plane_parts))
         for g, ks in comps:
             links.append(ks)
             name = f"K{len(ribs) + 1}"
@@ -365,6 +453,7 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float):
                 parent[find(k)] = find(ks[0])
                 n_slots += 1
             ribs.append(part)
+            plane_parts.append(part)
     return ribs, n_slots, planes, cuts, links
 
 
@@ -476,19 +565,16 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                        ((-thickness / 2, s), (thickness / 2, s), (thickness / 2, s + reach),
                         (-thickness / 2, s + reach))])))
 
-    def crosses(c, seam: Seam, shape: Polygon, planes) -> bool:
-        """El suport (a `c`, amb aquesta secció) travessa el gruix d'alguna costella?"""
-        d3 = (seam.e1 - seam.e0) / np.linalg.norm(seam.e1 - seam.e0)
-        X, Y = seam.a, -seam.np_
-        pts3 = np.array([c + X * x + Y * y + d3 * z for x, y in np.array(shape.exterior.coords)
-                         for z in (-thickness / 2, thickness / 2)])
-        for origin, N, u, v, rib in planes:
-            dist = (pts3 - origin) @ N
-            if dist.min() <= thickness / 2 + 0.5 and dist.max() >= -thickness / 2 - 0.5:
-                flat = np.column_stack([(pts3 - origin) @ u, (pts3 - origin) @ v])
-                if MultiPoint([tuple(p) for p in flat]).convex_hull.buffer(0.5).intersects(rib):
-                    return True
-        return False
+    def laps(c, seam: Seam, shape: Polygon, planes):
+        """Osques a mitja fusta amb totes les costelles que creua; None si n'hi ha cap d'impossible."""
+        notch_b, notch_r = [], []
+        for plane in planes:
+            res = half_lap(c, seam, shape, plane, thickness)
+            if res is None:
+                return None
+            notch_b += res[0]
+            notch_r += res[1]
+        return notch_b, notch_r
 
     # Ordre: primer les arestes d'un arbre que uneix totes les plaques (les més llargues
     # primer), després la resta.
@@ -539,7 +625,8 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                     if not inside or any(r.buffer(0.5).intersects(o) for k, rs in rects.items()
                                          for r in rs for o in footprints[k]):
                         continue
-                    if rough is not None and any(crosses(c, seam, rough, planes) for c in cs):
+                    # Els suports deixen pas a les costelles (mitja fusta); si no es pot, l'esquiven.
+                    if rough is not None and any(laps(c, seam, rough, planes) is None for c in cs):
                         continue
                     leg, centers = cand, cs
                     break
@@ -594,6 +681,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
 
     brackets = 0
     slots = rib_slots
+    laps_made = [0]
     planned = {id(seam) for seam, *_ in plans}
     no_bracket = sum(1 for sm in seams if id(sm) not in planned)
     for seam, s, leg, centers in plans:
@@ -619,9 +707,9 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                         cut.setdefault(k, []).extend(rects)
                 keep[k] = ok
             shape = arch_bracket(seam, thickness, s, leg, keep[seam.p], keep[seam.q])
-            if shape is not None and rib_planes and any(crosses(c, seam, shape, rib_planes)
+            if shape is not None and rib_planes and any(laps(c, seam, shape, rib_planes) is None
                                                         for c in centers):
-                shape = None  # l'arc topa amb una costella: estel enganxat
+                shape = None  # l'arc no pot encaixar amb una costella: estel enganxat
             if shape is None:
                 cut = {}
         if shape is None and L > thickness:  # estel enganxat: també és el pla B de l'encaix
@@ -650,10 +738,19 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
         if shape is None:
             no_bracket += 1
             continue
-        for i in range(count):
-            part = Part(f"S{seam.number}.{i + 1}", shape)
-            spot = shape.buffer(-1.2)
-            spot = spot.representative_point() if not spot.is_empty else shape.representative_point()
+        for i, c in enumerate(centers):
+            lap = laps(c, seam, shape, rib_planes) if rib_planes else ([], [])
+            own = shape
+            if lap is None:
+                continue
+            if lap[0]:  # osca per deixar pas a la costella, i l'osca complementària a la costella
+                own = shape.difference(unary_union(lap[0]))
+                for rib_part, notch in lap[1]:
+                    rib_part.shape = rib_part.shape.difference(notch)
+                laps_made[0] += len(lap[0])
+            part = Part(f"S{seam.number}.{i + 1}", own)
+            spot = own.buffer(-1.2)
+            spot = spot.representative_point() if not spot.is_empty else own.representative_point()
             part.labels.append((np.array(spot.coords[0]), f"a{seam.number}", 2.5))
             parts.append(part)
             brackets += 1
@@ -668,7 +765,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
     groups_ = len({find(k) for k in plates})
     stats = dict(plaques=len(plates), suports=brackets, costelles=len(ribs), ranures=slots,
                  arestes=len(seams),
-                 grups_de_plaques=groups_,
+                 grups_de_plaques=groups_, mitges_fustes=laps_made[0],
                  arestes_sense_suport=no_bracket, plaques_perdudes=lost,
                  planxes=len(svgs), massa_grans=oversize)
     notes = [f"Gruix del material: {thickness:g} mm · espai entre cares: {gap:g} mm",

@@ -177,3 +177,58 @@ def test_costella_uneix_la_punta_del_coet():
 
 def test_sense_problemes_no_hi_ha_costelles(caixa):
     assert caixa.stats["costelles"] == 0
+
+
+def _ninot():
+    pytest.importorskip("manifold3d")
+    parts = [trimesh.creation.box(s) for s in
+             ((20, 12, 30), (12, 12, 12), (6, 6, 26), (6, 6, 26), (7, 7, 24), (7, 7, 24))]
+    for p, o in zip(parts, ((0, 0, 0), (0, 0, 21), (13, 0, 2), (-13, 0, 2), (5, 0, -27), (-5, 0, -27))):
+        p.apply_translation(o)
+    return trimesh.boolean.union(parts)
+
+
+def test_suports_i_costelles_encaixen_a_mitja_fusta_sense_solapar():
+    """Els suports que creuen una costella hi encaixen a mitja fusta: cap punt de cap
+    suport no queda dins de la costella."""
+    import shapely
+    calls = []
+    orig, orig_nest = cares.half_lap, cares.nest
+    seen = {}
+
+    def spy(c, seam, shape, plane, t):
+        res = orig(c, seam, shape, plane, t)
+        if res and res[0]:
+            calls.append((c, seam, plane))
+        return res
+
+    def nest_spy(parts, sheet, title):
+        seen.update({id(p): p.shape for p in parts})
+        seen["parts"] = parts
+        return orig_nest(parts, sheet, title)
+
+    cares.half_lap, cares.nest = spy, nest_spy
+    try:
+        r = cares.make_faces(_ninot(), 400, 120, 3.0, 0.0)
+    finally:
+        cares.half_lap, cares.nest = orig, orig_nest
+    assert r.stats["mitges_fustes"] > 0
+    t, checked = 3.0, 0
+    for c, seam, (origin, N, u, v, rparts) in calls:
+        mine = [p for p in seen["parts"] if p.name.startswith(f"S{seam.number}.")]
+        if len(mine) != 1:
+            continue
+        rib = shapely.union_all([seen[id(p)] for p in rparts])
+        sh = seen[id(mine[0])]
+        d3 = (seam.e1 - seam.e0) / np.linalg.norm(seam.e1 - seam.e0)
+        x0, y0, x1, y1 = sh.bounds
+        xs, ys = (g.ravel() for g in np.meshgrid(np.linspace(x0, x1, 60), np.linspace(y0, y1, 60)))
+        ins = shapely.contains_xy(sh, xs, ys)
+        for z in np.linspace(-0.45 * t, 0.45 * t, 4):
+            p3 = c + np.outer(xs[ins], seam.a) + np.outer(ys[ins], -seam.np_) + z * d3
+            near = np.abs((p3 - origin) @ N) < 0.45 * t
+            q = np.column_stack([(p3[near] - origin) @ u, (p3[near] - origin) @ v])
+            assert not shapely.contains_xy(rib, q[:, 0], q[:, 1]).any()
+            checked += int(near.sum())
+    assert checked > 0
+    assert all(p.shape.geom_type == "Polygon" for p in r.parts if p.name[0] in "SK")

@@ -97,7 +97,8 @@ if uploaded:
                 if r:
                     s = r.stats
                     st.success(f"{s['plaques']} plaques · {s['suports']} suports · "
-                               f"{s['costelles']} costelles · {s['ranures']} ranures · "
+                               f"{s['costelles']} costelles · {s['mitges_fustes']} mitges fustes · "
+                               f"{s['ranures']} ranures · "
                                f"{s['planxes']} planxes")
                     import vista
                     st.markdown("**Grups de plaques** (un color per grup unit; vora negra = placa "

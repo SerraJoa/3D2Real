@@ -67,8 +67,12 @@ streamlit run app.py
 - **Costelles interiors**: si hi ha plaques massa estretes per a suports (la punta d'un con),
   el grup es tanca amb una costella: la secció del model en un pla, menys el gruix de les
   plaques i buidada per dins, amb un tenó a cada placa que travessa. Es tria el pla que
-  uneix més grups (i, a igualtat, la costella més petita); els suports s'hi adapten. Si les
-  costelles no milloren el resultat, no se'n posen.
+  uneix més grups (i, a igualtat, la costella més petita). Si les costelles no milloren el
+  resultat, no se'n posen.
+- On un suport creua una costella, s'encaixen **a mitja fusta**: el suport s'osca des d'una
+  punta fins a la meitat del creuament i la costella des de l'altra, amb el gruix de l'altra
+  peça vist de biaix i 0,1 mm de joc. Si no es pot (cap punta no queda a la vora), el suport
+  esquiva la costella.
 - Gravat a la cara interior (la que queda amunt en tallar): número de placa, número
   d'aresta i on va cada suport.
 
