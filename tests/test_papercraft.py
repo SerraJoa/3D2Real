@@ -17,10 +17,13 @@ MESHES = {
 }
 
 
-@pytest.fixture(params=sorted(MESHES))
+@pytest.fixture(params=[(nom, linies) for nom in sorted(MESHES) for linies in (0, 40)],
+                ids=lambda p: f"{p[0]}-linies{p[1]}")
 def result(request):
-    mesh = MESHES[request.param]()
-    return mesh, pc.make_papercraft(mesh, target_faces=400, size_mm=120, tab_mm=5)
+    nom, linies = request.param
+    mesh = MESHES[nom]()
+    return mesh, pc.make_papercraft(mesh, target_faces=400, size_mm=120, tab_mm=5,
+                                    lines_deg=linies)
 
 
 def test_cada_cara_un_cop_i_mides_reals(result):
@@ -200,3 +203,54 @@ def test_estadistiques_de_pestanyes(result):
     assert (s["pestanyes_encongides"] + s["pestanyes_dentades"]
             + s["pestanyes_retallades"]) <= s["pestanyes"]
     assert s["pestanyes_canviades"] <= s["pestanyes"]
+
+
+@pytest.mark.parametrize("nom, zones", [("caixa", 6), ("caixa_densa", 6), ("cilindre", 3),
+                                        ("esfera", 1)])
+def test_zones_naturals_segons_les_linies(nom, zones):
+    m = pc.clean(MESHES[nom]())
+    assert pc.natural_zones(m, 40).max() + 1 == zones
+
+
+def test_zones_minuscules_s_uneixen_a_una_veina():
+    m = pc.clean(MESHES["caixa"]())
+    # Les cares de 30×20 són l'11,5 % de l'àrea: amb un llindar del 12 % s'uneixen a una veïna.
+    assert pc.natural_zones(m, 40, min_share=0.12).max() + 1 < 6
+
+
+def test_linies_naturals_tallen_per_les_linies():
+    # Les costures entre peces diferents han de caure sobre línies naturals (≥40°),
+    # tret que una zona sola no càpiga al paper (aquí sí que hi cap).
+    m = pc.scale_to(pc.clean(MESHES["tor"]()), 80)
+    zones = pc.natural_zones(m, 40)
+    r = pc.make_papercraft(MESHES["tor"](), 400, 80, lines_deg=40)
+    owner = {fi: i for i, p in enumerate(r.pieces) for fi in p.tris}
+    for e, fs in pc.edge_faces(m.faces).items():
+        if len(fs) == 2 and owner[fs[0]] != owner[fs[1]]:
+            assert zones[fs[0]] != zones[fs[1]]
+    assert r.stats["peces_petites"] == 0
+
+
+def test_unir_peces_redueix_la_caixa_a_una_creu():
+    r = pc.make_papercraft(MESHES["caixa"](), 400, 80, lines_deg=40)
+    assert r.stats["peces"] == 1
+
+
+def test_zones_que_tanquen_problemes_ajunten_els_propers():
+    m = pc.clean(MESHES["esfera"]())
+    adj = pc.edge_faces(m.faces)
+    a = 0
+    b = next(f for f in adj[tuple(sorted(m.faces[a][:2]))] if f != a)  # veïna de 0
+    lluny = int(np.argmax(np.linalg.norm(m.triangles_center - m.triangles_center[a], axis=1)))
+    z = pc.problem_zones(m, {a, b, lluny}, max_path=6)
+    assert z[a] == z[b] > 0
+    assert z[lluny] > 0 and z[lluny] != z[a]
+    assert (z > 0).sum() == 3  # cap cara de més: el camí entre veïnes és directe
+
+
+def test_zones_que_tanquen_problemes_redueixen_peces_a_l_esfera():
+    sense = pc.make_papercraft(MESHES["esfera"](), 400, 120, problem_zones_on=False)
+    amb = pc.make_papercraft(MESHES["esfera"](), 400, 120)
+    assert amb.stats["peces"] <= sense.stats["peces"] / 2
+    assert amb.stats["peces_petites"] <= sense.stats["peces_petites"] / 4
+    assert amb.stats["sense_pestanya"] == 0
