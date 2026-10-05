@@ -164,6 +164,26 @@ if models:
         prepared, _ = dc.prepare(mesh, target, size, None)
         frames = dc.face_frames(prepared)
 
+        # ---- Vista del model: tal com s'ha carregat i com queda amb la simplificació
+        cache = st.session_state.setdefault("_model_view", {})
+        src = (models[0].name, len(models[0].getvalue()))
+        if cache.get("src") != src:
+            cache.clear()
+            cache.update(src=src, original=visor.pack(visor.model_solids(mesh, "Model", "#9fb3c8")))
+        if cache.get("simple_key") != (target, size):
+            cache.update(simple_key=(target, size), simple=visor.pack(visor.model_solids(
+                prepared, "Simplificat", "#dcc29a", edges="totes")))
+        v1, v2 = st.columns(2)
+        with v1:
+            shown = cache["original"]["triangles"]
+            st.markdown(f"**Model carregat** · {len(mesh.faces):,} cares"
+                        + (f" (es mostra amb {shown:,})" if shown < len(mesh.faces) else ""))
+            visor.show([], key="visor_original", height=320, data=cache["original"])
+        with v2:
+            st.markdown(f"**Simplificat** · {len(prepared.faces):,} cares · "
+                        f"{max(prepared.extents):.0f} mm")
+            visor.show([], key="visor_simplificat", height=320, data=cache["simple"])
+
         branch = st.radio("Branca", ["📄 Desplegable de paper", "🔷 Cares (làser)",
                                      "🥞 Laminació (làser)"], horizontal=True)
 
@@ -224,14 +244,19 @@ if models:
                                           "plaques (els tenons es veuen per fora). Cola: estel "
                                           "enganxat per dins, del tot invisible.")
                     bracket = st.slider("Llargada dels braços dels suports (mm)", 8, 60, 25)
+                    fast_ribs = st.checkbox("Cerca de costelles ràpida", False,
+                                            help="Amb formes arrodonides (moltes plaques petites) la "
+                                                 "cerca completa pot trigar molts minuts. La ràpida "
+                                                 "prova menys plans i s'atura als 10 s, però pot "
+                                                 "deixar més grups de plaques sense unir.")
                 st.caption("Les cares van millor amb models de poques zones planes (caixes, poliedres). "
                            "Amb formes arrodonides i moltes cares, cada triangle és una placa: pot "
-                           "trigar un minut o més i quedar en grups solts. Baixa la simplificació.")
+                           "trigar molts minuts: baixa la simplificació o tria la cerca de costelles ràpida.")
                 if st.button("🚀 Generar cares", type="primary"):
                     with st.spinner("Tallant cares i suports…"):
                         st.session_state["cares"] = cares.make_faces(
                             mesh, target, size, thickness, gap, bracket, laser.SHEETS[sheet], joint,
-                            decor=decor, texture=texture)
+                            decor=decor, texture=texture, fast_ribs=fast_ribs)
                 r, prefix = st.session_state.get("cares"), "cares"
                 if r:
                     s = r.stats
