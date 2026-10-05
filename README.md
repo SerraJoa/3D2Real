@@ -12,6 +12,7 @@ per construir-la en paper o amb tall làser.
 | Branca 3: laminació | `laminacio.py` | capes per a làser per apilar, amb columnes passants |
 | Planxes | `laser.py` | peces planes comunes i col·locació a la planxa (vermell = tallar, blau = gravar) |
 | Decoració | `decor.py`, `dibuix.py` | textures, imatges, patrons i dibuixos a les cares, amb o sense marc |
+| Vista del muntatge | `visor.py` | el resultat de cada branca en 3D, muntat, per girar, separar i tallar |
 
 ```bash
 pip install -r requirements.txt
@@ -64,10 +65,14 @@ streamlit run app.py
 - **Suports enganxats**: un estel per dins, del tot invisible.
 - Primer es posen els suports que uneixen totes les plaques (arbre, arestes llargues
   primer); cada suport es mou al llarg de l'aresta o s'escurça fins que cap dins les dues
-  plaques i no en toca cap altre.
+  plaques i no en toca cap altre. També es comprova en 3D que l'arc no toqui cap altre
+  suport ni cap altra placa per dins (als vèrtexs on es troben moltes plaques, com la punta
+  d'un con).
 - **Costelles interiors**: si hi ha plaques massa estretes per a suports (la punta d'un con),
   el grup es tanca amb una costella: la secció del model en un pla, menys el gruix de les
-  plaques i buidada per dins, amb un tenó a cada placa que travessa. Es tria el pla que
+  plaques i buidada per dins, amb un tenó a cada placa que travessa. Es retalla amb la
+  secció real de totes les plaques que talla, i la ranura de cada tenó segueix el biaix de
+  la placa al llarg de tot el gruix. Es tria el pla que
   uneix més grups (i, a igualtat, la costella més petita). Si les costelles no milloren el
   resultat, no se'n posen.
 - On un suport creua una costella, s'encaixen **a mitja fusta**: el suport s'osca des d'una
@@ -122,6 +127,25 @@ amb la cara de fora amunt i les seves marques de muntatge passen a referència, 
 ratlles i traços del dibuix; sempre amb un marc mínim de 3 mm des de la vora de la placa i
 2 mm lluny de ranures i suports) o fer **totes dues coses**.
 
+## Vista del muntatge
+
+Sota el resultat de cada branca hi ha el model muntat en 3D: les peces de paper plegades
+(un color per peça), les plaques amb els suports i les costelles, o les capes amb la
+costella i les tiges. És un visor WebGL propi, sense dependències externes.
+
+- **Girar**: arrossega (ratolí o un dit). **Ampliar**: roda o pessic. **Doble clic**: vista
+  inicial.
+- **Separa**: les peces s'allunyen del centre (plaques i paper), les capes s'obren cap
+  amunt i la costella surt de costat.
+- **Tall x / y / z**: treu la banda del model que mira a la càmera fins al punt triat, per
+  veure'n l'interior (cavitat, costelles, suports).
+- Un botó per tipus de peça: sòlid ● → transparent ◌ → amagat ○ (per exemple, plaques
+  transparents per veure els suports).
+
+Cada peça làser guarda on va (`Part.pose`: matriu 4×4 i gruix) abans de girar-la per a la
+planxa. Els tests (`tests/test_visor.py`) comproven amb aquestes posicions que cap peça
+muntada no comparteix volum amb cap altra.
+
 ## Llegenda (paper)
 
 | Línia | Significat |
@@ -144,6 +168,6 @@ ratlles i traços del dibuix; sempre amb un marc mínim de 3 mm des de la vora d
 ## Tests
 
 ```bash
-pip install pytest
+pip install -r requirements.txt -r requirements-dev.txt
 pytest
 ```

@@ -36,6 +36,10 @@ class Part:
     decor: list = field(default_factory=list)                         # decor.DecorOp (gravat)
     guides: list[np.ndarray] = field(default_factory=list)            # referència (verd)
     guide_labels: list[tuple[np.ndarray, str, float]] = field(default_factory=list)
+    # On va al model muntat: (matriu 4×4, z0, z1). La peça és el prisma de la forma entre
+    # z0 i z1 en coordenades locals, i la matriu el porta a 3D. Només és vàlida abans de
+    # transformar la peça per col·locar-la a la planxa (vegeu `placed`).
+    pose: tuple | None = None
 
     def outline(self):
         return self.shape
@@ -58,6 +62,38 @@ class Part:
         self.guides += self.engraves
         self.guide_labels += self.labels
         self.engraves, self.labels = [], []
+
+
+def pose(x, y, z, origin, z0: float, z1: float) -> tuple:
+    """Posició de muntatge: els eixos locals x, y, z (gruix) i l'origen, en 3D."""
+    M = np.eye(4)
+    M[:3, 0], M[:3, 1], M[:3, 2], M[:3, 3] = x, y, z, origin
+    return M, float(z0), float(z1)
+
+
+def solid(shape, M: np.ndarray, z0: float, z1: float):
+    """Prisma (trimesh) de la forma 2D entre z0 i z1 en coordenades locals, portat a 3D per M."""
+    import trimesh
+    meshes = []
+    for g in getattr(shape, "geoms", [shape]):
+        if g.geom_type != "Polygon" or g.area < 1e-3:
+            continue
+        g = g.simplify(0.05, preserve_topology=True)
+        try:
+            meshes.append(trimesh.creation.extrude_polygon(g, max(z1 - z0, 1e-3)))
+        except Exception:  # polígon degenerat
+            continue
+    if not meshes:
+        return None
+    m = trimesh.util.concatenate(meshes)
+    m.apply_translation([0.0, 0.0, z0])
+    m.apply_transform(M)  # trimesh ja gira les cares si la base és de mà esquerra
+    return m
+
+
+def placed(parts: list[Part]) -> list[tuple[str, object, np.ndarray, float, float]]:
+    """Peces muntades (nom, forma, matriu, z0, z1), abans de passar-les a la planxa."""
+    return [(p.name, p.shape, *p.pose) for p in parts if p.pose is not None]
 
 
 def _path(ring) -> str:

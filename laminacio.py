@@ -20,7 +20,7 @@ import shapely.ops
 from shapely.ops import polygonize, unary_union
 
 import papercraft as pc
-from laser import LaserResult, Part, nest
+from laser import LaserResult, Part, nest, placed, pose
 
 COLUMN_WALL = 2.0     # mm mínims de material entre un forat i la vora
 COLUMN_FIT = 0.1      # mm de joc al forat respecte de la tiga
@@ -231,7 +231,7 @@ def _reconnect(solid, hollowed, width: float):
 SPINE_FIT = 0.1   # mm de joc a les osques de la costella
 
 
-def spine(solid: list, geoms: list, t: float, wall: float):
+def spine(solid: list, geoms: list, t: float, wall: float, z0: float = 0.0):
     """Costella vertical que alinea totes les capes buidades a través d'osques a les parets.
 
     La costella passa per la cavitat seguint l'eix llarg de la cavitat més gran. A cada
@@ -240,7 +240,8 @@ def spine(solid: list, geoms: list, t: float, wall: float):
     altres cap amunt i cap avall; només es parteix a les cintures (on la cavitat s'estreny i
     torna a eixamplar-se), i dos trams comparteixen la capa de la cintura (mitja dent cadascun).
 
-    Retorna (peces de costella, osques per capa {k: [polígons]}, notes de muntatge).
+    Retorna (peces de costella, osques per capa {k: [polígons]}, notes de muntatge). `z0` és
+    l'alçada de la base de la capa L1 (per a la posició de muntatge de la costella).
     """
     K = len(solid)
     cav = [solid[k].difference(geoms[k]) for k in range(K)]
@@ -319,6 +320,8 @@ def spine(solid: list, geoms: list, t: float, wall: float):
                 continue
             name = f"R{gi + 1}" + (chr(ord("a") + ri) if len(runs) > 1 else "")
             part = Part(name, shape)
+            # x al llarg de l'eix des de `start`, y = alçada des de la base, gruix de través.
+            part.pose = pose([*axis, 0.0], [0.0, 0.0, 1.0], [*perp, 0.0], [*start, z0], -t / 2, t / 2)
             for i in range(i0, i1 + 1):
                 k, a, b = grp[i]
                 part.labels.append((np.array([(a + b) / 2, (k + 0.5) * t]), f"L{k + 1}",
@@ -360,7 +363,7 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
     geoms = hollow(solid, wall, thickness, columns, column_d) if wall > 0 else solid
     ribs, spine_notes, notches = [], [], {}
     if use_spine:
-        ribs, notches, spine_notes = spine(solid, geoms, thickness, wall)
+        ribs, notches, spine_notes = spine(solid, geoms, thickness, wall, z0)
         geoms = [g.difference(unary_union(notches[k])) if k in notches else g
                  for k, g in enumerate(geoms)]
         # Els trossos que la costella no toca (tapes, braços massissos) van amb columnes.
@@ -389,6 +392,8 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
                 one += 1
             shape = g.difference(unary_union(mine)) if mine else g
             part = Part(name, shape)
+            part.pose = pose([1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0], [0, 0, z0 + k * thickness],
+                             0.0, thickness)
             # Contorn continu: on va la capa de sobre. En ratlles: on és la de sota (útil
             # quan la de sobre és més gran i no deixa veure res).
             if not above.is_empty:
@@ -404,6 +409,7 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
             parts.append(part)
 
     parts += ribs
+    assembly = placed(parts)
     title = f"Laminació · capes de {thickness:g} mm"
     svgs, groups, oversize = nest(parts, sheet, title)
     notes = [f"{K} capes de {thickness:g} mm ({len(parts)} peces). Munta de L1 (a baix) cap amunt,",
@@ -426,4 +432,9 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
                  estalvi=round(100 * (1 - sum(g.area for g in geoms) / full)) if full else 0,
                  peces_amb_una_columna=one, peces_sense_columna=none, planxes=len(svgs),
                  massa_grans=oversize)
-    return LaserResult(svgs, parts, stats, notes, groups)
+    res = LaserResult(svgs, parts, stats, notes, groups)
+    # Per a la vista del muntatge: peces al seu lloc i tiges (x, y, z de baix, z de dalt, Ø).
+    res.extra = dict(assembly=assembly, mesh=m,
+                     columns=[(x, y, z0 + a * thickness, z0 + (b + 1) * thickness, column_d)
+                              for x, y, a, b in columns])
+    return res
