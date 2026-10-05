@@ -22,7 +22,9 @@ streamlit run app.py
 4. **Pestanyes**: un trapezi a un dels dos costats de cada costura. Els trossos d'una
    mateixa aresta comparteixen número. Si una pestanya topa:
    - només amb altres pestanyes i poc (≤35 % de l'àrea) → s'encongeix una mica;
-   - només amb altres pestanyes i molt → es passa a l'altre costat de la costura;
+   - només amb altres pestanyes i molt → **es denten totes dues** com un engranatge: dents
+     alternades perpendiculars a l'aresta, amb 0,4 mm de joc, i cadascuna conserva la vora;
+   - si no es poden dentar sense deixar trossos solts → es passa a l'altre costat de la costura;
    - amb una cara, o no hi ha cap altra opció → es retalla.
 5. **Pàgines**: gira cada peça a la capsa mínima i les col·loca en prestatges (A4, A3, Carta).
 

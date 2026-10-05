@@ -4,7 +4,7 @@ from collections import Counter
 import numpy as np
 import pytest
 import trimesh
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Polygon
 
 import papercraft as pc
 
@@ -41,7 +41,7 @@ def test_cada_cara_un_cop_i_mides_reals(result):
 def test_cap_solapament_dins_de_cada_peca(result):
     _, r = result
     for p in r.pieces:
-        polys = [Polygon(t) for t in p.tris.values()] + [Polygon(t) for t in p.tabs]
+        polys = [Polygon(t) for t in p.tris.values()] + [Polygon(t) for t in p.tab_polys()]
         for a, b in itertools.combinations(polys, 2):
             assert a.intersection(b).area <= pc.OVERLAP_TOL * min(a.area, b.area) + 1e-6
 
@@ -136,27 +136,51 @@ def test_simplifica_malles_grans():
     assert r.stats["sense_pestanya"] <= 0.05 * r.stats["arestes_tallades"]
 
 
-def _peca_amb_pestanya(obstacle):
+def _peca_amb_pestanya(obstacle, base):
     """Una cara amb l'aresta AB a y=0 (pestanya cap a y<0) i una pestanya ja posada."""
     p = pc.Piece()
     tri = np.array([[0.0, 0.0], [10.0, 0.0], [5.0, 5.0]])
     p.place(0, tri, Polygon(tri))
-    p.tabs.append(np.array(obstacle))
-    p.tab_shapes.add(p.shapes.add(Polygon(obstacle)))
+    p.add_tab(pc.Tab(np.array(base[0], float), np.array(base[1], float),
+                     [np.array(obstacle, float)], Polygon(obstacle).area))
     return p, tri
 
 
 def test_pestanya_que_topa_poc_amb_una_altra_s_encongeix():
-    p, (A, B, C) = _peca_amb_pestanya([(6, -5), (12, -5), (12, -4.2), (6, -4.2)])
-    poly, frac, how = pc.fit_tab(p, 0, A, B, C, 5.0, clip=False)
-    assert how == "encongida"
-    assert 0.5 < frac < 1
-    assert not p.shapes.hits(Polygon(poly))
-    assert np.allclose(sorted(map(tuple, poly))[:1], [(0, 0)])  # segueix enganxada a AB
+    p, (A, B, C) = _peca_amb_pestanya([(6, -5), (12, -5), (12, -4.2), (6, -4.2)],
+                                      [(6, -5), (12, -5)])
+    fit = pc.fit_tab(p, 0, A, B, C, 5.0, clip=False)
+    assert fit.how == "encongida"
+    assert 0.5 < fit.frac < 1
+    assert not p.shapes.hits(Polygon(fit.polys[0]))
 
 
-def test_pestanya_tapada_per_una_altra_canvia_de_costat():
-    p, (A, B, C) = _peca_amb_pestanya([(-1, -6), (11, -6), (11, -0.5), (-1, -0.5)])
+def test_pestanyes_que_es_tapen_es_denten_com_un_engranatge():
+    # Una altra pestanya, enganxada a y=-6, que puja i tapa tota la nova.
+    p, (A, B, C) = _peca_amb_pestanya([(-1, -6), (11, -6), (11, -0.5), (-1, -0.5)],
+                                      [(-1, -6), (11, -6)])
+    fit = pc.fit_tab(p, 0, A, B, C, 5.0, clip=False)
+    assert fit.how == "dentada"
+    assert len(fit.polys) >= 2                      # diverses dents
+    other = list(fit.reshape.values())[0]
+    assert len(other) == 1                          # la tapada queda en forma de pinta
+    mine = [Polygon(q) for q in fit.polys]
+    theirs = Polygon(other[0])
+    assert all(m.intersection(theirs).area < 1e-6 for m in mine)
+    base_new, base_old = LineString([A, B]), LineString([(-1, -6), (11, -6)])
+    assert all(m.distance(base_new) < 1e-6 for m in mine)
+    assert theirs.distance(base_old) < 1e-6
+    assert theirs.area >= pc.TAB_MIN * 12 * 5.5
+    # Les dents s'alternen: la pinta ocupa els forats entre dents.
+    ys = sorted(q[:, 0].mean() for q in fit.polys)
+    assert ys[0] < ys[-1]
+
+
+def test_si_no_es_poden_dentar_canvia_de_costat():
+    # Una pestanya llarga, enganxada per l'extrem esquerre i dins l'abast de les dents noves:
+    # les franges en deixarien la major part solta.
+    p, (A, B, C) = _peca_amb_pestanya([(-1, -4.8), (30, -4.8), (30, -0.5), (-1, -0.5)],
+                                      [(-1, -0.5), (-1, -4.8)])
     assert pc.fit_tab(p, 0, A, B, C, 5.0, clip=False) is None
 
 
@@ -167,11 +191,12 @@ def test_pestanya_que_topa_amb_una_cara_no_s_encongeix_sino_que_es_retalla():
     other = np.array([[6.0, -5.0], [12.0, -5.0], [12.0, -4.2]])
     p.place(1, other, Polygon(other))
     assert pc.fit_tab(p, 0, *tri, 5.0, clip=False) is None
-    assert pc.fit_tab(p, 0, *tri, 5.0, clip=True)[2] == "retallada"
+    assert pc.fit_tab(p, 0, *tri, 5.0, clip=True).how == "retallada"
 
 
 def test_estadistiques_de_pestanyes(result):
     _, r = result
     s = r.stats
-    assert s["pestanyes_encongides"] + s["pestanyes_retallades"] <= s["pestanyes"]
+    assert (s["pestanyes_encongides"] + s["pestanyes_dentades"]
+            + s["pestanyes_retallades"]) <= s["pestanyes"]
     assert s["pestanyes_canviades"] <= s["pestanyes"]

@@ -36,6 +36,7 @@ if uploaded:
             st.success(f"{r.faces} cares · {s['peces']} peces · {s['pagines']} pàgines · "
                        f"{s['costures']} costures · {s['pestanyes']} pestanyes")
             st.caption(f"Pestanyes: {s['pestanyes_encongides']} encongides, "
+                       f"{s['pestanyes_dentades']} dentades, "
                        f"{s['pestanyes_canviades']} canviades de costat i "
                        f"{s['pestanyes_retallades']} retallades per no xocar.")
             if s["sense_pestanya"]:
