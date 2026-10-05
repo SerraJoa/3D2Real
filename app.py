@@ -35,9 +35,9 @@ if uploaded:
             s = r.stats
             st.success(f"{r.faces} cares · {s['peces']} peces · {s['pagines']} pàgines · "
                        f"{s['costures']} costures · {s['pestanyes']} pestanyes")
-            st.caption(f"Pestanyes: {s['pestanyes_encongides']} encongides i "
-                       f"{s['pestanyes_canviades']} canviades de costat per no xocar amb altres "
-                       f"pestanyes; {s['pestanyes_retallades']} retallades.")
+            st.caption(f"Pestanyes: {s['pestanyes_encongides']} encongides, "
+                       f"{s['pestanyes_canviades']} canviades de costat i "
+                       f"{s['pestanyes_retallades']} retallades per no xocar.")
             if s["sense_pestanya"]:
                 st.warning(f"{s['sense_pestanya']} trossos de costura no tenen lloc per a una "
                            "pestanya: enganxa'ls amb cinta per darrere.")
