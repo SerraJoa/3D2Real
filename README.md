@@ -90,6 +90,13 @@ streamlit run app.py
   Les columnes es trien abans de buidar: al voltant de cada una queda una anella de
   material unida a la paret per un pont, i si el buidat parteix una capa, es torna a unir
   amb un pont. Les peces petites poden anar dins la cavitat de les grans a la planxa.
+- **Alineació amb costella** (per defecte quan es buida): en lloc de columnes, una costella
+  vertical dins la cavitat, seguint-ne l'eix llarg, amb una dent a cada capa que entra a
+  dues osques de la paret (mitja paret de fondària, 0,1 mm de joc): fixa la capa en totes
+  direccions i en el gir. Es parteix en trams on l'amplada només creix o només decreix,
+  perquè les capes s'hi puguin enfilar des de l'extrem estret; dos trams comparteixen la
+  capa més ampla (mitja dent cadascun). Les instruccions diuen l'ordre d'enfilar. Les
+  peces que la costella no toca (tapes, trossos massissos) van amb columnes.
 
 ## Llegenda (paper)
 

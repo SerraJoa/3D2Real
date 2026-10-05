@@ -116,17 +116,22 @@ if uploaded:
                     wall = st.number_input("Buidar: gruix de paret (mm, 0 = massís)", 0.0, 50.0,
                                            6.0, 0.5,
                                            help="Les capes es buiden deixant aquesta paret per tots "
-                                                "costats; les columnes queden dins d'una anella "
-                                                "unida a la paret.")
+                                                "costats.")
+                    align = st.radio("Alineació", ["costella", "columnes"], horizontal=True,
+                                     help="Costella: una peça vertical dins la cavitat que encaixa "
+                                          "en osques de la paret de cada capa (cal buidar). "
+                                          "Columnes: tiges passants.")
                 if st.button("🚀 Generar capes", type="primary"):
                     with st.spinner("Tallant capes…"):
                         st.session_state["capes"] = laminacio.make_layers(
-                            mesh, target, size, thickness, column, laser.SHEETS[sheet], wall)
+                            mesh, target, size, thickness, column, laser.SHEETS[sheet], wall,
+                            align)
                 r, prefix = st.session_state.get("capes"), "capes"
                 if r:
                     s = r.stats
-                    st.success(f"{s['capes']} capes · {s['peces']} peces · {s['columnes']} "
-                               f"columnes · {s['estalvi']} % de material estalviat · "
+                    st.success(f"{s['capes']} capes · {s['peces']} peces · {s['costelles']} "
+                               f"costelles · {s['columnes']} columnes · "
+                               f"{s['estalvi']} % de material estalviat · "
                                f"{s['planxes']} planxes")
                     if s["peces_sense_columna"] or s["peces_amb_una_columna"]:
                         st.warning(f"{s['peces_amb_una_columna']} peces amb una sola columna i "

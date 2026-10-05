@@ -274,3 +274,57 @@ def test_buidar_no_parteix_el_tor():
     buit = lm.make_layers(m, 400, 120, 3.0, 5.0, wall=6.0)
     assert buit.stats["peces"] == massis.stats["peces"]
     assert buit.stats["estalvi"] > 0
+
+
+@pytest.fixture(scope="module")
+def caixa_costella():
+    return lm.make_layers(trimesh.creation.box((40, 30, 20)), 400, 60, 3.0, 5.0, wall=6.0,
+                          align="costella")
+
+
+def test_costella_alinea_les_capes_buidades_amb_osques(caixa_costella):
+    r = caixa_costella
+    assert r.stats["costelles"] == 1
+    rib = next(p for p in r.parts if p.name.startswith("R"))
+    teeth = {t for _, t, _ in rib.labels}
+    for p in r.parts:
+        if not p.name.startswith("L"):
+            continue
+        cavity = [Polygon(h) for h in p.shape.interiors if Polygon(h).area > 50]
+        if cavity:
+            assert p.name in teeth                     # cada capa buidada té dent
+            # La cavitat amb les dues osques: més estreta que la paret, però sense travessar-la.
+            assert cavity[0].distance(p.shape.exterior) >= 6.0 / 2 - 1e-6
+    # Les tapes (massisses) van amb columnes.
+    assert r.stats["peces_sense_columna"] == 0
+
+
+def test_dents_de_la_costella_entren_a_les_parets(caixa_costella):
+    rib = next(p for p in caixa_costella.parts if p.name.startswith("R"))
+    rect = np.array(rib.shape.minimum_rotated_rectangle.exterior.coords)
+    long_side = max(np.linalg.norm(rect[i + 1] - rect[i]) for i in range(2))
+    # Cavitat de 60 − 2·6 = 48 mm pel costat llarg, més 3 mm d'osca a cada paret
+    # (la peça pot estar girada a la planxa).
+    assert long_side == pytest.approx(48 + 2 * 3, abs=0.2)
+
+
+def test_costella_de_l_esfera_en_trams_que_es_poden_enfilar():
+    import shapely
+    import papercraft as pc
+    m = pc.scale_to(pc.clean(trimesh.creation.icosphere(2, radius=30)), 90)
+    z0, z1 = m.bounds[:, 2]
+    K = int(math.ceil((z1 - z0) / 3))
+    solid = [lm.slice_at(m, z0 + (k + 0.5) * 3 + 1e-7) for k in range(K)]
+    ribs, notches, notes = lm.spine(solid, lm.hollow(solid, 6.0, 3.0), 3.0, 6.0)
+    assert len(ribs) == 2
+    shared = set.intersection(*({t for _, t, _ in p.labels} for p in ribs))
+    assert len(shared) == 1                        # comparteixen la capa més ampla
+    for p in ribs:
+        # Cada tram només s'eixampla en un sentit: cada capa s'hi enfila des de l'extrem estret.
+        widths = []
+        for _, lab, _ in sorted(p.labels, key=lambda lb: int(lb[1][1:])):
+            k = int(lab[1:]) - 1
+            band = p.shape.intersection(shapely.geometry.box(-1e4, k * 3 + 0.05, 1e4, (k + 1) * 3 - 0.05))
+            widths.append(band.bounds[2] - band.bounds[0])
+        assert widths == sorted(widths) or widths == sorted(widths, reverse=True)
+    assert len(notes) == 2 and all("enfila-hi" in n for n in notes)
