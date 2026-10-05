@@ -224,6 +224,9 @@ if models:
                                           "plaques (els tenons es veuen per fora). Cola: estel "
                                           "enganxat per dins, del tot invisible.")
                     bracket = st.slider("Llargada dels braços dels suports (mm)", 8, 60, 25)
+                st.caption("Les cares van millor amb models de poques zones planes (caixes, poliedres). "
+                           "Amb formes arrodonides i moltes cares, cada triangle és una placa: pot "
+                           "trigar un minut o més i quedar en grups solts. Baixa la simplificació.")
                 if st.button("🚀 Generar cares", type="primary"):
                     with st.spinner("Tallant cares i suports…"):
                         st.session_state["cares"] = cares.make_faces(
