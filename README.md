@@ -1,7 +1,16 @@
 # Desplegables
 
-Generador de volums de paper per a retallar: carrega una malla 3D (STL o OBJ) i obté
-pàgines SVG per imprimir, retallar, plegar i enganxar.
+Generador de volums per a retallar: carrega una malla 3D (STL o OBJ) i obté els fitxers
+per construir-la en paper o amb tall làser.
+
+| Fase | Mòdul | Què fa |
+|---|---|---|
+| Importació | `papercraft.load_mesh` | STL/OBJ → malla neta (vèrtexs fusionats, sense cares degenerades) |
+| Reducció | `papercraft.simplify`, `scale_to` | nombre de cares i mida final en mm |
+| Branca 1: desplegable | `papercraft.py` | pàgines de paper per plegar i enganxar (vegeu més avall) |
+| Branca 2: cares | `cares.py` | plaques per a làser, una per zona plana, amb suports per dins |
+| Branca 3: laminació | `laminacio.py` | capes per a làser per apilar, amb columnes passants |
+| Planxes | `laser.py` | peces planes comunes i col·locació a la planxa (vermell = tallar, blau = gravar) |
 
 ```bash
 pip install -r requirements.txt
@@ -40,7 +49,33 @@ streamlit run app.py
    prova uns 30 girs i es queda el lloc lliure que deixa la seva vora de baix més amunt
    (la cerca es fa amb FFT). Entre peces hi ha 3 mm de separació.
 
-## Llegenda
+## Branca 2: cares (làser)
+
+- Cada zona plana és una placa del gruix del material; la cara de fora coincideix amb la
+  superfície del model i el gruix creix cap endins.
+- A cada aresta, les dues plaques es retiren el mínim perquè els gruixos no xoquin (es
+  calcula a la secció de l'aresta; serveix per a arestes convexes i còncaves), més mitja
+  **separació entre cares** si se'n vol (làmpades).
+- **Suports encaixats** (per defecte): un arc perpendicular a l'aresta que ressegueix la cara
+  interior de les dues plaques, amb dos tenons per braç que entren en ranures de les
+  plaques (0,1 mm de joc); als racons còncaus, l'arc passa per darrere la cantonada. Els
+  tenons travessen la placa: es veuen com a petits rectangles a fora.
+- **Suports enganxats**: un estel per dins, del tot invisible.
+- Primer es posen els suports que uneixen totes les plaques (arbre, arestes llargues
+  primer); cada suport es mou al llarg de l'aresta o s'escurça fins que no en toca cap altre.
+- Gravat a la cara interior (la que queda amunt en tallar): número de placa, número
+  d'aresta i on va cada suport.
+
+## Branca 3: laminació (làser)
+
+- Capes horitzontals del gruix del material, tallades pel pla mig de cada capa.
+- **Columnes passants**: forats alineats que travessen capes consecutives per posar-hi tiges;
+  cada tros en rep dos si hi caben (fixen posició i gir), a 2 mm de la vora i a dos
+  diàmetres entre elles. Es dona la llista de tiges amb la llargada.
+- Gravat a la cara de dalt: número de capa (llegible = cara amunt), fletxa d'orientació
+  comuna, contorn de la capa de sobre (continu) i de la de sota (ratlles).
+
+## Llegenda (paper)
 
 | Línia | Significat |
 |---|---|
