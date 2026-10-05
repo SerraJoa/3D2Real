@@ -75,6 +75,9 @@ streamlit run app.py
   la placa al llarg de tot el gruix. Es tria el pla que
   uneix més grups (i, a igualtat, la costella més petita). Si les costelles no milloren el
   resultat, no se'n posen.
+- **Cerca de costelles ràpida** (opcional): amb formes arrodonides hi ha moltes plaques
+  petites i molts grups solts, i la cerca completa pot trigar molts minuts. La ràpida prova
+  menys plans i s'atura als 10 s, però pot deixar més grups sense unir.
 - On un suport creua una costella, s'encaixen **a mitja fusta**: el suport s'osca des d'una
   punta fins a la meitat del creuament i la costella des de l'altra, amb el gruix de l'altra
   peça vist de biaix i 0,1 mm de joc. Si no es pot (cap punta no queda a la vora), el suport
@@ -126,6 +129,12 @@ amb la cara de fora amunt i les seves marques de muntatge passen a referència, 
 **tallar** (forats: zones fosques d'una imatge, cel·les de quadrícula i hexàgons, punts,
 ratlles i traços del dibuix; sempre amb un marc mínim de 3 mm des de la vora de la placa i
 2 mm lluny de ranures i suports) o fer **totes dues coses**.
+
+## Vista del model
+
+En carregar un model, es veu tal com s'ha carregat i, al costat, com queda amb la
+simplificació triada (amb totes les arestes, per veure'n els triangles) i a quina mida. Els
+models molt grans es mostren amb una còpia de 60.000 cares com a molt.
 
 ## Vista del muntatge
 

@@ -31,6 +31,7 @@ class Solid:
     mesh: trimesh.Trimesh
     color: str
     offset: np.ndarray = field(default_factory=lambda: np.zeros(3))  # on va en separar (× radi)
+    edges: str = "vives"            # arestes dibuixades: "vives" (i vores), "totes" o "cap"
 
 
 def prism(shape, M: np.ndarray, z0: float, z1: float) -> trimesh.Trimesh | None:
@@ -104,8 +105,25 @@ def paper_solids(res) -> list[Solid]:
     return out
 
 
-def _edges(m: trimesh.Trimesh) -> np.ndarray:
-    """Segments a dibuixar: vores i arestes vives (no les diagonals de les cares planes)."""
+def model_solids(mesh: trimesh.Trimesh, kind: str, color: str, edges: str = "vives",
+                 max_faces: int = 60000) -> list[Solid]:
+    """La malla tal qual (el model carregat o el simplificat). Si és molt gran, per veure-la
+    se'n fa una còpia amb `max_faces` cares (el visor aniria lent)."""
+    m = mesh
+    if len(m.faces) > max_faces:
+        import papercraft as pc
+        m = pc.simplify(m, max_faces)
+    m = trimesh.Trimesh(m.vertices, m.faces, process=False)  # sense textura ni colors
+    return [Solid(kind, m, color, edges=edges)]
+
+
+def _edges(m: trimesh.Trimesh, mode: str = "vives") -> np.ndarray:
+    """Segments a dibuixar: vores i arestes vives (no les diagonals de les cares planes),
+    totes les arestes (per veure els triangles) o cap."""
+    if mode == "cap":
+        return np.zeros((0, 3))
+    if mode == "totes":
+        return m.vertices[m.edges_unique].reshape(-1, 3)
     keep = [m.face_adjacency_edges[m.face_adjacency_angles > EDGE_ANGLE]]
     lone = trimesh.grouping.group_rows(m.edges_sorted, require_count=1)
     if len(lone):
@@ -136,7 +154,7 @@ def pack(solids: list[Solid]) -> dict:
         nrm.append(np.repeat(m.face_normals, 3, axis=0))
         col.append(np.tile(_rgb(s.color) + [k], (3 * n, 1)))
         off.append(np.tile(s.offset, (3 * n, 1)))
-        e = _edges(m)
+        e = _edges(m, s.edges)
         lpos.append(e)
         loff.append(np.tile(s.offset, (len(e), 1)))
         lkind.append(np.full(len(e), k))
@@ -146,6 +164,7 @@ def pack(solids: list[Solid]) -> dict:
     radius = float(np.linalg.norm(hi - lo) / 2) if solids else 1.0
     return dict(
         kinds=kinds, center=center.tolist(), radius=radius,
+        explode=bool(any(np.any(s.offset) for s in solids)),  # si no, no cal el control
         lo=lo.tolist() if solids else [0, 0, 0], hi=hi.tolist() if solids else [0, 0, 0],
         pos=_b64(cat(pos, 3), np.float32), nrm=_b64(cat(nrm, 3), np.float32),
         col=_b64(cat(col, 4), np.uint8), off=_b64(cat(off, 3), np.float32),
@@ -328,7 +347,8 @@ export default function(component) {
     r.oninput = () => { fn(+r.value); redraw(); }; return r; };
   const group = (...els) => { const g = document.createElement('span');
     g.style.cssText = 'display:inline-flex;gap:6px;align-items:center'; g.append(...els); return g; };
-  bar.append(group(label('Separa'), range(0, 1, 0.01, S.explode, v => { S.explode = v; })));
+  if (data.explode !== false) bar.append(group(label('Separa'), range(0, 1, 0.01, S.explode, v => { S.explode = v; })));
+  else S.explode = 0;
   const sel = document.createElement('select');
   for (const [v, t] of [['cap', 'sense tall'], ['x', 'tall x'], ['y', 'tall y'], ['z', 'tall z']]) {
     const o = document.createElement('option'); o.value = v; o.textContent = t; sel.append(o);

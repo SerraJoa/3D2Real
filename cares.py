@@ -402,7 +402,8 @@ def rib_candidate(m, plate_of, plates, normals, to2d, origin, N, t: float, solid
     return (comps, slots) if comps else None
 
 
-def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, solid_of=None):
+def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, solid_of=None,
+             fast: bool = False):
     """Costelles interiors per unir els grups de plaques que els suports no han pogut unir.
 
     Una costella és una secció del model (menys el gruix de les plaques, buidada per dins)
@@ -421,7 +422,9 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, so
         return x
 
     import time
-    deadline = time.monotonic() + RIB_SECONDS
+    # Ràpid (opcional): menys plans i un temps màxim. Amb molts grups solts la cerca
+    # completa creix amb el quadrat dels grups, però pot unir-ne més.
+    deadline = time.monotonic() + RIB_SECONDS if fast else math.inf
     ribs: list[Part] = []
     n_slots = 0
     planes, cuts, links = [], {}, []
@@ -436,7 +439,7 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, so
         main = max(groups, key=lambda g: len(groups[g]))
         normals_c, offsets = [np.eye(3)[i] for i in range(3)], []
         loose = sorted((g for g in groups if g != main), key=lambda g: -len(groups[g]))
-        for gid in loose[:RIB_AXES]:
+        for gid in (loose[:RIB_AXES] if fast else loose):
             ks = groups[gid]
             fs = np.isin(plate_of, ks)
             ns = m.face_normals[fs]
@@ -450,7 +453,7 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, so
                 h = pts @ N
                 heights |= {round(float(x), 3) for x in np.linspace(h.min(), h.max(), 16)[1:-1]}
             heights = sorted(heights)
-            if len(heights) > RIB_HEIGHTS:  # molts grups: una mostra repartida
+            if fast and len(heights) > RIB_HEIGHTS:  # molts grups: una mostra repartida
                 heights = [heights[i] for i in np.linspace(0, len(heights) - 1, RIB_HEIGHTS).astype(int)]
             for hgt in heights:
                 if time.monotonic() > deadline:
@@ -583,7 +586,8 @@ JOINTS = ("encaix", "cola")
 
 def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickness: float = 3.0,
                gap: float = 0.0, bracket_mm: float = 25.0, sheet=(600.0, 400.0),
-               joint: str = "encaix", decor: dict | None = None, texture=None) -> LaserResult:
+               joint: str = "encaix", decor: dict | None = None, texture=None,
+               fast_ribs: bool = False) -> LaserResult:
     """Plaques i suports per a làser.
 
     `joint`: "encaix" = suports en arc amb tenons que entren en ranures de les plaques (com
@@ -592,6 +596,9 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
 
     `decor` ({índex de placa: decor.DecorSpec}) grava o talla textures, imatges, patrons o
     dibuixos a les cares; `texture` és la decor.Texture de la malla original.
+
+    `fast_ribs` limita la cerca de costelles (menys plans, com a molt RIB_SECONDS): molt més
+    ràpid amb molts grups de plaques solts, però en pot deixar més sense unir.
     """
     if texture is not None:
         import decor as dc
@@ -830,7 +837,8 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
         rib_data = ([], 0, [], {}, [])
         if ribs_on and len(set(groups_of(trial).values())) > 1:
             # 2) Costelles per a aquests grups, amb les plaques encara lliures de suports.
-            rib_data = add_ribs(m, plate_of, plates, normals, to2d, trial[:], thickness, plate_solid)
+            rib_data = add_ribs(m, plate_of, plates, normals, to2d, trial[:], thickness, plate_solid,
+                                fast_ribs)
         ribs_, rib_slots_, planes_, cuts_, links_ = rib_data
         # 3) Suports que esquiven les ranures i el gruix de les costelles.
         parent_ = list(range(n_plates))

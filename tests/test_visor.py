@@ -89,3 +89,23 @@ def test_paper_i_empaquetat():
     assert len(base64.b64decode(d["off"])) // 12 == n
     assert len(base64.b64decode(d["lpos"])) // 12 == len(base64.b64decode(d["lkind"]))  # un per punt
     assert d["kinds"] == ["Peces"]
+
+
+def test_vista_del_model_i_simplificat():
+    m = trimesh.creation.icosphere(3, 30)  # 1280 cares
+    gran = visor.pack(visor.model_solids(m, "Model", "#9fb3c8", max_faces=500))
+    assert gran["triangles"] <= 500  # una còpia més lleugera per veure-la
+    d = visor.pack(visor.model_solids(m, "Simplificat", "#dcc29a", edges="totes"))
+    assert d["triangles"] == len(m.faces)
+    # Totes les arestes: dos punts per aresta.
+    assert len(base64.b64decode(d["lpos"])) // 12 == 2 * len(m.edges_unique)
+    cap = visor.pack(visor.model_solids(m, "Model", "#9fb3c8", edges="cap"))
+    assert len(base64.b64decode(cap["lpos"])) == 0
+
+
+def test_cerca_de_costelles_rapida_opcional():
+    """Per defecte la cerca és completa; la ràpida és una opció i també dona un muntatge vàlid."""
+    import inspect
+    assert inspect.signature(cares.make_faces).parameters["fast_ribs"].default is False
+    r = cares.make_faces(trimesh.creation.icosphere(1, 30), 200, 80, 3.0, fast_ribs=True)
+    assert overlaps(visor.cares_solids(r)) == []
