@@ -11,6 +11,7 @@ per construir-la en paper o amb tall làser.
 | Branca 2: cares | `cares.py` | plaques per a làser, una per zona plana, amb suports per dins |
 | Branca 3: laminació | `laminacio.py` | capes per a làser per apilar, amb columnes passants |
 | Planxes | `laser.py` | peces planes comunes i col·locació a la planxa (vermell = tallar, blau = gravar) |
+| Decoració | `decor.py`, `dibuix.py` | textures, imatges, patrons i dibuixos a les cares, amb o sense marc |
 
 ```bash
 pip install -r requirements.txt
@@ -84,6 +85,42 @@ streamlit run app.py
   diàmetres entre elles. Es dona la llista de tiges amb la llargada.
 - Gravat a la cara de dalt: número de capa (llegible = cara amunt), fletxa d'orientació
   comuna, contorn de la capa de sobre (continu) i de la de sota (ratlles).
+- **Buidar** (opcional, 6 mm a la interfície): cada capa perd la seva secció retirada un
+  gruix de paret, intersecada amb la de les capes veïnes fins a aquest gruix amunt i avall;
+  així la cavitat no arriba mai a la superfície i les capes de dalt i de baix fan de tapa.
+  Les columnes es trien abans de buidar: al voltant de cada una queda una anella de
+  material unida a la paret per un pont, i si el buidat parteix una capa, es torna a unir
+  amb un pont. Les peces petites poden anar dins la cavitat de les grans a la planxa.
+- **Alineació amb costella** (per defecte quan es buida): en lloc de columnes, una costella
+  vertical dins la cavitat, seguint-ne l'eix llarg, amb una dent a cada capa que entra a
+  dues osques de la paret (mitja paret de fondària, 0,1 mm de joc): fixa la capa en totes
+  direccions i en el gir. Es munta començant per la capa més ampla i enfilant les altres
+  cap amunt (per dalt) i cap avall (per baix): cada capa passa per trams de costella que
+  caben dins les seves osques. Només es parteix a les cintures (on la cavitat s'estreny i
+  torna a eixamplar-se), i dos trams comparteixen la capa de la cintura (mitja dent
+  cadascun). Les instruccions diuen l'ordre. Les peces que la costella no toca (tapes,
+  trossos massissos) van amb columnes.
+
+## Decoració de les cares (paper i làser)
+
+Una **cara** és una zona plana del model, amb el mateix número que les plaques (C1, C2…).
+Cada cara té coordenades pròpies en mm, vista des de fora i amb l'amunt del model cap amunt.
+A la interfície es veuen numerades en dues vistes 3D i es poden triar una, diverses o totes.
+
+- **Textura del model**: carrega un OBJ amb el seu MTL i imatges (o un GLB). Encara que la
+  malla se simplifiqui, cada triangle nou pren les UV del triangle original més proper.
+- **Imatge**: una imatge per cara, que omple (retallant) o s'encabeix a la cara.
+- **Patró**: ratlles, quadrícula, punts, hexàgons, color pla o text, amb separació, gruix,
+  angle i color.
+- **Dibuix a mà**: un llenç amb la forma de la cara on es dibuixa amb el ratolí o el dit.
+- **Marc**: deixa una vora sense decorar del gruix triat (0 = sense marc).
+
+Al **paper**, la decoració s'imprimeix a cada triangle retallada al triangle i al marc.
+Al **làser** (cares), es pot **gravar** (imatges en ràster, vectors en blau; la placa es talla
+amb la cara de fora amunt i les seves marques de muntatge passen a referència, en verd),
+**tallar** (forats: zones fosques d'una imatge, cel·les de quadrícula i hexàgons, punts,
+ratlles i traços del dibuix; sempre amb un marc mínim de 3 mm des de la vora de la placa i
+2 mm lluny de ranures i suports) o fer **totes dues coses**.
 
 ## Llegenda (paper)
 

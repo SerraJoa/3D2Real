@@ -57,3 +57,40 @@ def plates_view(result, **kw) -> str:
     colors = [PALETTE[order[group[int(k)]] % len(PALETTE)] for k in plate_of]
     lonely = [ex["supports"][int(k)] == 0 for k in plate_of]
     return view_svg(m, colors, outline=lonely, **kw)
+
+
+def faces_view(mesh: trimesh.Trimesh, frames, decorated=(), width: float = 380,
+               yaw: float = 35, pitch: float = 25) -> str:
+    """Vista 3D amb el número de cada cara (C1, C2…); les cares decorades, en color."""
+    cara = np.zeros(len(mesh.faces), dtype=int)
+    for fr in frames:
+        cara[fr.faces] = fr.index
+    colors = ["#f28e2b" if cara[f] in decorated else "#d9e2ec" for f in range(len(mesh.faces))]
+    svg = view_svg(mesh, colors, width=width, yaw=yaw, pitch=pitch)
+    # Etiquetes al centre de cada cara visible.
+    a, b = math.radians(yaw), math.radians(pitch)
+    Rz = np.array([[math.cos(a), -math.sin(a), 0], [math.sin(a), math.cos(a), 0], [0, 0, 1]])
+    Rx = np.array([[1, 0, 0], [0, math.cos(b), -math.sin(b)], [0, math.sin(b), math.cos(b)]])
+    R = Rx @ Rz
+    V = (mesh.vertices - mesh.centroid) @ R.T
+    P = np.column_stack([V[:, 0], -V[:, 2]])
+    lo, hi = P.min(0), P.max(0)
+    scale = width / max(hi - lo)
+    labels = []
+    visible = [fr for fr in frames if (fr.normal @ R.T)[1] <= -0.15]  # ni d'esquena ni de cantell
+    # Amb moltes cares, només les més grans (les altres no es podrien llegir).
+    visible = sorted(visible, key=lambda fr: -mesh.area_faces[fr.faces].sum())[:40]
+    for fr in visible:
+        fs = fr.faces
+        c = (mesh.triangles_center[fs] * mesh.area_faces[fs, None]).sum(0) / mesh.area_faces[fs].sum()
+        q = (c - mesh.centroid) @ R.T
+        x, y = (np.array([q[0], -q[2]]) - lo) * scale + 10
+        size = math.sqrt(mesh.area_faces[fs].sum()) * scale / 4
+        if size < 6:
+            continue
+        size = float(min(size, 14))
+        common = (f'x="{x:.1f}" y="{y:.1f}" font-family="sans-serif" font-size="{size:.1f}" '
+                  f'text-anchor="middle" dominant-baseline="central"')
+        labels.append(f'<text {common} fill="white" stroke="white" stroke-width="3">C{fr.index + 1}</text>'
+                      f'<text {common} fill="#102a43">C{fr.index + 1}</text>')
+    return svg.replace("</svg>", "".join(labels) + "</svg>")

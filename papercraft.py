@@ -171,6 +171,8 @@ class Piece:
     shapes: _Shapes = field(default_factory=_Shapes, repr=False)
     shape_of: dict[int, int] = field(default_factory=dict, repr=False)  # cara → índex a shapes
     tab_of: dict[int, Tab] = field(default_factory=dict, repr=False)    # índex a shapes → pestanya
+    decor: list = field(default_factory=list)                           # decor.DecorOp
+    face_tags: list = field(default_factory=list)                       # (posició, "C3")
 
     def place(self, fi: int, coords: np.ndarray, poly: Polygon) -> None:
         self.tris[fi] = coords
@@ -196,6 +198,9 @@ class Piece:
         self.labels = [(fn(p[None])[0], s, z) for p, s, z in self.labels]
         self.cuts = [fn(c) for c in self.cuts]
         self.fold_lines = [(fn(c), k) for c, k in self.fold_lines]
+        for op in self.decor:
+            op.transform(fn)
+        self.face_tags = [(fn(p[None])[0], s) for p, s in self.face_tags]
 
 
 # Arestes amb un angle de plec menor que aquest (radians) es consideren planes.
@@ -1239,17 +1244,25 @@ DASH = {"vall": "3,1.5", "muntanya": "3,1,0.6,1"}
 
 
 def page_svg(page: Page, size: tuple[float, float], number: int, total: int,
-             face_numbers: bool = False) -> str:
+             face_numbers: bool = False, images: dict | None = None) -> str:
     W, H = size
-    out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}mm" height="{H}mm" '
+    out = [f'<svg xmlns="http://www.w3.org/2000/svg" '
+           f'xmlns:xlink="http://www.w3.org/1999/xlink" width="{W}mm" height="{H}mm" '
            f'viewBox="0 0 {W} {H}">',
            f'<rect width="{W}" height="{H}" fill="white"/>']
-    for p in page.pieces:
+    if images and any(p.decor for p in page.pieces):
+        import decor as dc
+        out.append(f'<defs>{dc.image_defs(images)}</defs>')
+    for pi, p in enumerate(page.pieces):
         out.append('<g fill="#e6e6e6" stroke="none">')
         out += [f'<polygon points="{_pts(t)}"/>' for t in p.tab_polys()]
         out.append('</g><g fill="white" stroke="none">')
         out += [f'<polygon points="{_pts(t)}"/>' for t in p.tris.values()]
-        out.append('</g><g stroke="black" stroke-width="0.3" stroke-linecap="round">')
+        out.append('</g>')
+        if p.decor:
+            import decor as dc
+            out.append(dc.ops_svg(p.decor, f"p{number}_{pi}_"))
+        out.append('<g stroke="black" stroke-width="0.3" stroke-linecap="round">')
         out += [f'<line x1="{c[0,0]:.2f}" y1="{c[0,1]:.2f}" x2="{c[1,0]:.2f}" y2="{c[1,1]:.2f}"/>'
                 for c in p.cuts]
         out.append('</g><g stroke="#555" stroke-width="0.25" fill="none">')
@@ -1260,11 +1273,10 @@ def page_svg(page: Page, size: tuple[float, float], number: int, total: int,
         out += [f'<text x="{q[0]:.2f}" y="{q[1]:.2f}" font-size="{z:.2f}">{s}</text>'
                 for q, s, z in p.labels]
         out.append('</g>')
-        if face_numbers:
-            out.append('<g font-family="sans-serif" fill="#999" font-size="1.6" '
+        if face_numbers and p.face_tags:
+            out.append('<g font-family="sans-serif" fill="#999" font-size="2.2" '
                        'text-anchor="middle" dominant-baseline="central">')
-            out += [f'<text x="{t.mean(0)[0]:.2f}" y="{t.mean(0)[1]:.2f}">{fi + 1}</text>'
-                    for fi, t in p.tris.items()]
+            out += [f'<text x="{q[0]:.2f}" y="{q[1]:.2f}">{t}</text>' for q, t in p.face_tags]
             out.append('</g>')
     out.append(f'<text x="10" y="{H - 4}" font-family="sans-serif" font-size="3" fill="#555">'
                f'Pàgina {number}/{total} · contínua = tall · ratlles = plec de vall · '
@@ -1282,6 +1294,7 @@ class Result:
     faces: int
     stats: dict[str, int]
     sheets: list[list[Piece]] = field(default_factory=list)  # peces de cada pàgina
+    mesh: trimesh.Trimesh | None = None                       # malla simplificada i escalada
 
     def zip_bytes(self) -> bytes:
         buf = io.BytesIO()
@@ -1298,10 +1311,62 @@ def _score(pieces: list[Piece], stats: dict) -> float:
             + 0.5 * stats["pestanyes_retallades"])
 
 
+def decorate(m: trimesh.Trimesh, pieces: list[Piece], decor: dict | None, texture=None,
+             tag_faces: bool = False) -> dict:
+    """Porta les decoracions de cada cara (decor.DecorSpec) als triangles de les peces.
+
+    Retorna les imatges que cal posar a les pàgines (clau → png, ample, alt).
+    """
+    import decor as dc
+    frames = dc.face_frames(m)
+    cara = np.zeros(len(m.faces), dtype=int)
+    for fr in frames:
+        cara[fr.faces] = fr.index
+    images: dict[str, tuple] = {}
+    sources = {}
+    for k, spec in (decor or {}).items():
+        if spec.kind == "textura":
+            if texture is not None:
+                sources[k] = ("textura", dc.texture_ops(frames[k], m, texture, spec),
+                              frames[k].shape.buffer(-spec.frame) if spec.frame > 0 else frames[k].shape)
+                images["tex"] = (dc._png(texture.image), *texture.image.size)
+        else:
+            src = dc.build_source(frames[k], spec)
+            for key, png, w, h, _ in src.images:
+                images[key] = (png, w, h)
+            sources[k] = ("font", src, src.clip)
+    for p in pieces:
+        biggest: dict[int, tuple[float, int]] = {}
+        for fi, pts in p.tris.items():
+            k = int(cara[fi])
+            area = abs(_cross(pts[1] - pts[0], pts[2] - pts[0])) / 2
+            if k not in biggest or area > biggest[k][0]:
+                biggest[k] = (area, fi)
+            if k not in sources:
+                continue
+            fr = frames[k]
+            M = dc.affine_from(fr.to_local(m.vertices[m.faces[fi]]), pts)
+            kind, data, clip_local = sources[k]
+            tri = Polygon(pts).buffer(0.05)  # una mica de solapament: sense ratlles blanques
+            clip = tri.intersection(shapely.transform(clip_local, lambda q: dc.apply_affine(M, q)))
+            if kind == "textura":
+                for f, Mt in data:
+                    if f == fi:
+                        p.decor.append(dc.DecorOp(f'<use href="#tex" transform="{dc.svg_matrix(Mt)}"/>',
+                                                  M, clip))
+            else:
+                p.decor.append(dc.DecorOp(dc.source_content(data), M, clip))
+        if tag_faces:
+            for k, (_, fi) in biggest.items():
+                p.face_tags.append((p.tris[fi].mean(axis=0), f"C{k + 1}"))
+    return images
+
+
 def make_papercraft(mesh: trimesh.Trimesh, target_faces: int, size_mm: float,
                     tab_mm: float = 5.0, page: str = "A4", landscape: bool = False,
                     face_numbers: bool = False, lines_deg: float = 0.0,
-                    problem_zones_on: bool = True) -> Result:
+                    problem_zones_on: bool = True, decor: dict | None = None,
+                    texture=None) -> Result:
     """Desplega la malla i la posa en pàgines.
 
     - `lines_deg` > 0: primer parteix per les arestes que pleguen més d'aquest angle,
@@ -1309,8 +1374,15 @@ def make_papercraft(mesh: trimesh.Trimesh, target_faces: int, size_mm: float,
     - `problem_zones_on`: on el desplegament deixa peces petites, tanca els problemes
       propers en zones pròpies (tires estretes) i torna a desplegar; ho repeteix amb els
       problemes nous i es queda el millor resultat.
+    - `decor`: decoració per cara ({índex de cara: decor.DecorSpec}); `texture`: decor.Texture
+      de la malla original (per a les cares amb decoració "textura").
+    `face_numbers` escriu el número de cada cara (C1, C2…), el mateix que fa servir `decor`.
     """
-    m = scale_to(simplify(clean(mesh), target_faces), size_mm)
+    if texture is not None:
+        import decor as dc
+        m, texture = dc.prepare(mesh, target_faces, size_mm, texture)
+    else:
+        m = scale_to(simplify(clean(mesh), target_faces), size_mm)
     size = PAGES[page][::-1] if landscape else PAGES[page]
     room = (size[0] - 2 * MARGIN - 2 * tab_mm, size[1] - 2 * MARGIN - 2 * tab_mm)
     lines = natural_zones(m, lines_deg) if lines_deg > 0 else None
@@ -1343,8 +1415,10 @@ def make_papercraft(mesh: trimesh.Trimesh, target_faces: int, size_mm: float,
             problems |= new
 
     pieces, owner, stats, n_zones = best
+    images = decorate(m, pieces, decor, texture, face_numbers) if (decor or face_numbers) else {}
     pages, oversize = layout(pieces, size)
     stats.update(peces=len(pieces), pagines=len(pages), massa_grans=oversize,
                  zones=n_zones, peces_petites=sum(1 for p in pieces if len(p.tris) <= SMALL_PIECE))
-    svgs = [page_svg(pg, size, i, len(pages), face_numbers) for i, pg in enumerate(pages, 1)]
-    return Result(svgs, pieces, len(m.faces), stats, [pg.pieces for pg in pages])
+    svgs = [page_svg(pg, size, i, len(pages), face_numbers, images)
+            for i, pg in enumerate(pages, 1)]
+    return Result(svgs, pieces, len(m.faces), stats, [pg.pieces for pg in pages], m)

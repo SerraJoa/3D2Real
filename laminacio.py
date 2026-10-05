@@ -163,14 +163,212 @@ def _dashed(lines: list[np.ndarray], dash: float = 2.0, space: float = 1.5) -> l
     return out
 
 
+def hollow(geoms: list, wall: float, thickness: float, columns=(), column_d: float = 0.0) -> list:
+    """Buida les capes deixant una paret de `wall` mm per tots costats, també per dalt i baix.
+
+    El forat de cada capa és la seva secció retirada `wall`, intersecada amb la de les capes
+    veïnes fins a `wall` mm amunt i avall: així la cavitat no arriba mai a la superfície, i
+    les primeres i últimes capes (o les de sota d'un sostre pla) queden massisses.
+
+    Al voltant de cada columna que passa per la cavitat es deixa una anella de material
+    unida a la paret per un pont: les columnes no es mouen i cada capa continua sent una peça.
+    """
+    r = column_d / 2 + COLUMN_FIT
+    K = len(geoms)
+    reach = max(1, int(math.ceil(wall / thickness)))
+    eroded = [g.buffer(-wall) if not g.is_empty else Polygon() for g in geoms]
+    out = []
+    for k, g in enumerate(geoms):
+        hole = eroded[k]
+        for j in range(k - reach, k + reach + 1):
+            if hole.is_empty:
+                break
+            hole = hole.intersection(eroded[j]) if 0 <= j < K else Polygon()
+        hole = hole.buffer(0)
+        keep = []
+        for x, y, a, b in columns:
+            if a <= k <= b and not hole.is_empty and hole.buffer(r + COLUMN_WALL).contains(Point(x, y)):
+                p = Point(x, y)
+                edge = shapely.ops.nearest_points(p, g.exterior if g.geom_type == "Polygon"
+                                                  else g.boundary)[1]
+                keep += [p.buffer(r + COLUMN_WALL + 1.0, 32),
+                         LineString([p, edge]).buffer(max(wall, 2 * COLUMN_WALL) / 2)]
+        if keep:
+            hole = hole.difference(unary_union(keep))
+        # Forats massa petits no valen la pena.
+        hole = unary_union([h for h in getattr(hole, "geoms", [hole])
+                            if h.geom_type == "Polygon" and h.area > wall * wall])
+        out.append(_reconnect(g, g.difference(hole), max(wall, 2 * COLUMN_WALL))
+                   if not hole.is_empty else g)
+    return out
+
+
+def _reconnect(solid, hollowed, width: float):
+    """Si buidar ha partit un tros en diversos, els torna a unir amb ponts de paret."""
+    pieces = []
+    for isl in _islands(solid):
+        parts = [p for p in _islands(hollowed.intersection(isl))]
+        for _ in range(len(parts) + 2):
+            if len(parts) <= 1:
+                break
+            parts.sort(key=lambda p: p.area)
+            small, rest = parts[0], unary_union(parts[1:])
+            a, b = shapely.ops.nearest_points(small, rest)
+            # El pont s'allarga una mica perquè trepitgi les dues parts i no quedi tocant.
+            ab = np.array(b.coords[0]) - np.array(a.coords[0])
+            n = np.linalg.norm(ab)
+            ext = ab / n * width / 2 if n > 1e-9 else np.zeros(2)
+            line = LineString([np.array(a.coords[0]) - ext, np.array(b.coords[0]) + ext])
+            bridge = line.buffer(width / 2, cap_style=2).intersection(isl)
+            joined = _islands(unary_union([small, rest, bridge]))
+            if len(joined) >= len(parts):  # no s'ha pogut unir: es deixa com està
+                break
+            parts = joined
+        pieces += parts
+    return unary_union(pieces) if pieces else hollowed
+
+
+SPINE_FIT = 0.1   # mm de joc a les osques de la costella
+
+
+def spine(solid: list, geoms: list, t: float, wall: float):
+    """Costella vertical que alinea totes les capes buidades a través d'osques a les parets.
+
+    La costella passa per la cavitat seguint l'eix llarg de la cavitat més gran. A cada
+    capa té una dent que entra a les osques de les dues parets, de manera que fixa la capa
+    en totes direccions i en el gir. Es munta començant per la capa més ampla i enfilant les
+    altres cap amunt i cap avall; només es parteix a les cintures (on la cavitat s'estreny i
+    torna a eixamplar-se), i dos trams comparteixen la capa de la cintura (mitja dent cadascun).
+
+    Retorna (peces de costella, osques per capa {k: [polígons]}, notes de muntatge).
+    """
+    K = len(solid)
+    cav = [solid[k].difference(geoms[k]) for k in range(K)]
+    big = max(range(K), key=lambda k: cav[k].area)
+    if cav[big].is_empty:
+        return [], {}, []
+    rect = np.array(cav[big].minimum_rotated_rectangle.exterior.coords)
+    sides = [rect[i + 1] - rect[i] for i in range(2)]
+    axis = max(sides, key=np.linalg.norm)
+    axis = axis / np.linalg.norm(axis)
+    c = np.array(cav[big].centroid.coords[0])
+    far = 10000.0
+    start = c - axis * far
+    line = LineString([start, c + axis * far])
+    perp = np.array([-axis[1], axis[0]])
+    d = max(wall / 2, 1.0)
+    half = t / 2 + SPINE_FIT
+
+    teeth: list[tuple[int, float, float]] = []
+    notches: dict[int, list] = {}
+    for k in range(K):
+        inter = cav[k].intersection(line)
+        for g in getattr(inter, "geoms", [inter]):
+            if g.geom_type != "LineString" or g.length < 2 * t:
+                continue
+            s0, s1 = sorted(line.project(shapely.geometry.Point(q)) for q in g.coords[::len(g.coords) - 1])
+            teeth.append((k, s0 - d, s1 + d))
+            for a, b in ((s0 - d, s0 + 0.5), (s1 - 0.5, s1 + d)):
+                pa, pb = start + axis * a, start + axis * b
+                notches.setdefault(k, []).append(
+                    Polygon([pa - perp * half, pb - perp * half, pb + perp * half, pa + perp * half]))
+    if not teeth:
+        return [], {}, []
+
+    # Peces connexes de la costella (dents de capes consecutives que se solapen).
+    teeth.sort()
+    groups: list[list] = []
+    for k, a, b in teeth:
+        for grp in groups:
+            pk, pa, pb = grp[-1]
+            if pk == k - 1 and a < pb and b > pa:
+                grp.append((k, a, b))
+                break
+        else:
+            groups.append([(k, a, b)])
+
+    parts, notes = [], []
+    for gi, grp in enumerate(groups):
+        # Trams que es poden muntar d'una peça: des de la capa més ampla cap a cada
+        # extrem, cada dent ha de cabre dins de l'anterior (la capa hi passa pel damunt).
+        # Es comença per la capa més ampla i s'enfila cap amunt i cap avall. Només es talla
+        # on la cavitat s'estreny i torna a eixamplar-se (una cintura).
+        inside = lambda i, j: grp[i][1] >= grp[j][1] - 1e-6 and grp[i][2] <= grp[j][2] + 1e-6
+        runs, i0, phase = [], 0, "puja"
+        for i in range(1, len(grp)):
+            if phase == "puja" and inside(i - 1, i):
+                continue
+            if inside(i, i - 1):
+                phase = "baixa"
+                continue
+            runs.append((i0, i - 1))  # cintura: la capa i-1 es comparteix
+            i0, phase = i - 1, "puja"
+        runs.append((i0, len(grp) - 1))
+        for ri, (i0, i1) in enumerate(runs):
+            rects = []
+            for i in range(i0, i1 + 1):
+                k, a, b = grp[i]
+                lo, hi = k * t, (k + 1) * t
+                if i == i0 and ri > 0:
+                    lo += t / 2   # comparteix la capa de la cintura amb el tram de sota
+                if i == i1 and ri < len(runs) - 1:
+                    hi -= t / 2   # i amb el de sobre
+                rects.append(shapely.geometry.box(a, lo, b, hi))
+            shape = unary_union(rects)
+            if shape.is_empty:
+                continue
+            name = f"R{gi + 1}" + (chr(ord("a") + ri) if len(runs) > 1 else "")
+            part = Part(name, shape)
+            for i in range(i0, i1 + 1):
+                k, a, b = grp[i]
+                part.labels.append((np.array([(a + b) / 2, (k + 0.5) * t]), f"L{k + 1}",
+                                    float(min(2.0, 0.7 * t))))
+            parts.append(part)
+            ks = [grp[i][0] for i in range(i0, i1 + 1)]
+            ws = [grp[i][2] - grp[i][1] for i in range(i0, i1 + 1)]
+            p = int(np.argmax(ws))
+            up = [f"L{k + 1}" for k in ks[p + 1:]]
+            down = [f"L{k + 1}" for k in reversed(ks[:p])]
+            how = [f"comença per L{ks[p] + 1} (la més ampla)"]
+            span = lambda xs: xs[0] if len(xs) == 1 else f"{xs[0]}…{xs[-1]}"
+            if up:
+                how.append(f"després enfila per dalt {span(up)}")
+            if down:
+                how.append(f"i per baix {span(down)}")
+            notes.append(f"  costella {name}: capes L{ks[0] + 1}–L{ks[-1] + 1}; " + ", ".join(how))
+    return parts, notches, notes
+
+
+ALIGNS = ("columnes", "costella")
+
+
 def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickness: float = 3.0,
-                column_d: float = 5.0, sheet=(600.0, 400.0)) -> LaserResult:
+                column_d: float = 5.0, sheet=(600.0, 400.0), wall: float = 0.0,
+                align: str = "columnes") -> LaserResult:
+    """Capes per apilar. Amb `wall` > 0 es buiden deixant una paret d'aquest gruix (mm).
+
+    `align`: "columnes" (tiges passants) o "costella" (només capes buidades: una costella
+    vertical dins la cavitat que encaixa en osques de les parets de cada capa).
+    """
     m = pc.scale_to(pc.simplify(pc.clean(mesh), target_faces), size_mm)
     z0, z1 = m.bounds[0][2], m.bounds[1][2]
     K = max(1, int(math.ceil((z1 - z0) / thickness - 1e-9)))
-    geoms = [slice_at(m, z0 + (k + 0.5) * thickness + 1e-7) for k in range(K)]
+    solid = [slice_at(m, z0 + (k + 0.5) * thickness + 1e-7) for k in range(K)]
+    use_spine = align == "costella" and wall > 0
+    # Les columnes es trien sobre les capes massisses i el buidat les respecta.
+    columns = [] if use_spine else place_columns([_islands(g) for g in solid], column_d)
+    geoms = hollow(solid, wall, thickness, columns, column_d) if wall > 0 else solid
+    ribs, spine_notes, notches = [], [], {}
+    if use_spine:
+        ribs, notches, spine_notes = spine(solid, geoms, thickness, wall)
+        geoms = [g.difference(unary_union(notches[k])) if k in notches else g
+                 for k, g in enumerate(geoms)]
+        # Els trossos que la costella no toca (tapes, braços massissos) van amb columnes.
+        loose = [[g for g in _islands(geoms[k])
+                  if k not in notches or not g.buffer(0.5).intersects(unary_union(notches[k]))]
+                 for k in range(K)]
+        columns = place_columns(loose, column_d)
     layers = [_islands(g) for g in geoms]
-    columns = place_columns(layers, column_d)
     r = column_d / 2 + COLUMN_FIT
 
     parts: list[Part] = []
@@ -182,7 +380,10 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
         for j, g in enumerate(lay):
             name = f"L{k + 1}" + (chr(ord("a") + j) if len(lay) > 1 else "")
             mine = [h for h in holes if g.contains(h)]
-            if not mine:
+            spined = k in notches and g.buffer(0.5).intersects(unary_union(notches[k]))
+            if spined:
+                pass  # l'alinea la costella
+            elif not mine:
                 none += 1
             elif len(mine) < COLUMNS_PER_PIECE:
                 one += 1
@@ -202,15 +403,27 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
             part.engraves += _arrow(p + np.array([size * 1.8, 0.0]), size * 1.6)
             parts.append(part)
 
+    parts += ribs
     title = f"Laminació · capes de {thickness:g} mm"
     svgs, groups, oversize = nest(parts, sheet, title)
     notes = [f"{K} capes de {thickness:g} mm ({len(parts)} peces). Munta de L1 (a baix) cap amunt,",
+             *([f"Buidades amb parets de {wall:g} mm: el contorn gravat de la capa veïna inclou el seu forat."]
+               if wall > 0 else []),
              "amb el número llegible a dalt i totes les fletxes cap al mateix costat.",
              "El contorn continu gravat a cada capa mostra on va la de sobre; el de ratlles, on és la de sota.",
-             f"Tiges de Ø{column_d:g} mm (forats de Ø{2 * r:g} mm):"]
-    for i, (x, y, a, b) in enumerate(columns, 1):
-        notes.append(f"  columna {i}: capes L{a + 1}–L{b + 1}, llargada {(b - a + 1) * thickness:g} mm")
-    stats = dict(capes=K, peces=len(parts), columnes=len(columns),
+             ]
+    if use_spine:
+        notes += ["Costelles (R): les dents entren a les osques de la paret de cada capa (el",
+                  "número de capa és gravat a cada dent). Les peces que no toca cap costella",
+                  "(tapes, trossos massissos) van amb columnes.", *spine_notes]
+    if columns:
+        notes.append(f"Tiges de Ø{column_d:g} mm (forats de Ø{2 * r:g} mm):")
+        for i, (x, y, a, b) in enumerate(columns, 1):
+            notes.append(f"  columna {i}: capes L{a + 1}–L{b + 1}, llargada "
+                         f"{(b - a + 1) * thickness:g} mm")
+    full = sum(g.area for g in solid)
+    stats = dict(capes=K, peces=len(parts) - len(ribs), columnes=len(columns), costelles=len(ribs),
+                 estalvi=round(100 * (1 - sum(g.area for g in geoms) / full)) if full else 0,
                  peces_amb_una_columna=one, peces_sense_columna=none, planxes=len(svgs),
                  massa_grans=oversize)
     return LaserResult(svgs, parts, stats, notes, groups)

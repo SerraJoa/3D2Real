@@ -202,10 +202,10 @@ def test_suports_i_costelles_encaixen_a_mitja_fusta_sense_solapar():
             calls.append((c, seam, plane))
         return res
 
-    def nest_spy(parts, sheet, title):
+    def nest_spy(parts, sheet, title, images=None):
         seen.update({id(p): p.shape for p in parts})
         seen["parts"] = parts
-        return orig_nest(parts, sheet, title)
+        return orig_nest(parts, sheet, title, images)
 
     cares.half_lap, cares.nest = spy, nest_spy
     try:
@@ -232,3 +232,103 @@ def test_suports_i_costelles_encaixen_a_mitja_fusta_sense_solapar():
             checked += int(near.sum())
     assert checked > 0
     assert all(p.shape.geom_type == "Polygon" for p in r.parts if p.name[0] in "SK")
+
+
+@pytest.fixture(scope="module")
+def capes_buides():
+    m = trimesh.creation.box((40, 30, 20))
+    return lm.make_layers(m, 400, 60, 3.0, 5.0, wall=6.0)
+
+
+def test_buidar_estalvia_material_i_deixa_tapes(capes_buides):
+    r = capes_buides
+    assert r.stats["estalvi"] > 30
+    holed = [p for p in r.parts if any(Polygon(h).area > 50 for h in p.shape.interiors)]
+    # 30 mm d'alçada amb parets de 6 mm: les dues capes de dalt i de baix són tapes massisses.
+    names = {p.name for p in holed}
+    for tapa in ("L1", "L2", "L9", "L10"):
+        assert tapa not in names
+    assert names
+
+
+def test_la_cavitat_no_arriba_a_la_superficie(capes_buides):
+    for p in capes_buides.parts:
+        for h in p.shape.interiors:
+            hole = Polygon(h)
+            if hole.area > 50:
+                assert hole.distance(p.shape.exterior) >= 6.0 - 1e-6
+
+
+def test_buidar_respecta_les_columnes_i_cada_capa_es_una_peca(capes_buides):
+    r = capes_buides
+    assert r.stats["peces"] == r.stats["capes"]
+    assert r.stats["peces_sense_columna"] == 0
+    for p in r.parts:
+        small = [Polygon(h) for h in p.shape.interiors if Polygon(h).area < 50]
+        assert len(small) >= lm.COLUMNS_PER_PIECE  # els forats de les columnes hi són
+
+
+def test_buidar_no_parteix_el_tor():
+    m = trimesh.creation.torus(30, 10, major_sections=16, minor_sections=8)
+    massis = lm.make_layers(m, 400, 120, 3.0, 5.0)
+    buit = lm.make_layers(m, 400, 120, 3.0, 5.0, wall=6.0)
+    assert buit.stats["peces"] == massis.stats["peces"]
+    assert buit.stats["estalvi"] > 0
+
+
+@pytest.fixture(scope="module")
+def caixa_costella():
+    return lm.make_layers(trimesh.creation.box((40, 30, 20)), 400, 60, 3.0, 5.0, wall=6.0,
+                          align="costella")
+
+
+def test_costella_alinea_les_capes_buidades_amb_osques(caixa_costella):
+    r = caixa_costella
+    assert r.stats["costelles"] == 1
+    rib = next(p for p in r.parts if p.name.startswith("R"))
+    teeth = {t for _, t, _ in rib.labels}
+    for p in r.parts:
+        if not p.name.startswith("L"):
+            continue
+        cavity = [Polygon(h) for h in p.shape.interiors if Polygon(h).area > 50]
+        if cavity:
+            assert p.name in teeth                     # cada capa buidada té dent
+            # La cavitat amb les dues osques: més estreta que la paret, però sense travessar-la.
+            assert cavity[0].distance(p.shape.exterior) >= 6.0 / 2 - 1e-6
+    # Les tapes (massisses) van amb columnes.
+    assert r.stats["peces_sense_columna"] == 0
+
+
+def test_dents_de_la_costella_entren_a_les_parets(caixa_costella):
+    rib = next(p for p in caixa_costella.parts if p.name.startswith("R"))
+    rect = np.array(rib.shape.minimum_rotated_rectangle.exterior.coords)
+    long_side = max(np.linalg.norm(rect[i + 1] - rect[i]) for i in range(2))
+    # Cavitat de 60 − 2·6 = 48 mm pel costat llarg, més 3 mm d'osca a cada paret
+    # (la peça pot estar girada a la planxa).
+    assert long_side == pytest.approx(48 + 2 * 3, abs=0.2)
+
+
+def test_l_esfera_es_munta_amb_una_sola_costella_des_del_mig():
+    import papercraft as pc
+    m = pc.scale_to(pc.clean(trimesh.creation.icosphere(2, radius=30)), 90)
+    z0, z1 = m.bounds[:, 2]
+    K = int(math.ceil((z1 - z0) / 3))
+    solid = [lm.slice_at(m, z0 + (k + 0.5) * 3 + 1e-7) for k in range(K)]
+    ribs, notches, notes = lm.spine(solid, lm.hollow(solid, 6.0, 3.0), 3.0, 6.0)
+    assert len(ribs) == 1
+    assert "comença per" in notes[0] and "per dalt" in notes[0] and "per baix" in notes[0]
+
+
+def test_una_cintura_parteix_la_costella():
+    # Rellotge de sorra: s'estreny al mig i torna a eixamplar-se. Cap capa no pot passar
+    # per la cintura, així que la costella es parteix en dos trams que la comparteixen.
+    import papercraft as pc
+    prof = np.array([[0, 0], [30, 0], [30, 5], [12, 30], [30, 55], [30, 60], [0, 60]], float)
+    m = pc.scale_to(pc.clean(trimesh.creation.revolve(prof, sections=24)), 90)
+    z0, z1 = m.bounds[:, 2]
+    K = int(math.ceil((z1 - z0) / 3))
+    solid = [lm.slice_at(m, z0 + (k + 0.5) * 3 + 1e-7) for k in range(K)]
+    ribs, notches, notes = lm.spine(solid, lm.hollow(solid, 6.0, 3.0), 3.0, 6.0)
+    assert len(ribs) == 2
+    shared = set.intersection(*({t for _, t, _ in p.labels} for p in ribs))
+    assert len(shared) == 1
