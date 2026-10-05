@@ -1068,10 +1068,13 @@ class Page:
 NEST_RES = 1.0   # mm per quadre de la graella de col·locació
 NEST_GAP = 3.0   # mm de separació mínima entre peces
 NEST_TURNS = 24  # girs repartits que es proven, a més dels de capsa mínima
+NEST_SMALL = 0.02  # peces de menys d'aquesta fracció de la pàgina: només 4 girs
 
 
-def piece_outline(p: Piece):
-    """Forma real de la peça: cares i pestanyes."""
+def piece_outline(p):
+    """Forma real de la peça: cares i pestanyes (o la forma d'una peça làser)."""
+    if hasattr(p, "outline"):
+        return p.outline()
     return unary_union([Polygon(t) for t in p.tris.values()] + [Polygon(q) for q in p.tab_polys()])
 
 
@@ -1086,15 +1089,41 @@ def _raster(geom, res: float):
     return shapely.contains_xy(fat, gx, gy), (x0, y0)
 
 
-def _free_spot(occ: np.ndarray, focc, mask: np.ndarray) -> tuple[int, int] | None:
-    """Primera posició (fila, columna), de dalt a baix i d'esquerra a dreta, on `mask` no toca `occ`."""
+def _fast_len(n: int) -> int:
+    """Mida ≥ n feta només de factors 2, 3 i 5: la FFT hi va molt més de pressa."""
+    while True:
+        m = n
+        for p in (2, 3, 5):
+            while m % p == 0:
+                m //= p
+        if m == 1:
+            return n
+        n += 1
+
+
+def _fft_shape(shape: tuple[int, int]) -> tuple[int, int]:
+    return _fast_len(shape[0]), _fast_len(shape[1])
+
+
+def _occ_fft(occ: np.ndarray):
+    return np.fft.rfft2(occ.astype(float), s=_fft_shape(occ.shape))
+
+
+def _mask_fft(shape: tuple[int, int], mask: np.ndarray):
+    return np.conj(np.fft.rfft2(mask.astype(float), s=_fft_shape(shape)))
+
+
+def _free_spot(occ: np.ndarray, focc, mask: np.ndarray, fmask) -> tuple[int, int] | None:
+    """Primera posició (fila, columna), de dalt a baix i d'esquerra a dreta, on `mask` no toca `occ`.
+
+    La correlació és circular, però amb la mida de FFT ≥ la de la pàgina i només posicions
+    on la màscara hi cap sencera, no hi ha cap volta.
+    """
     H, W = occ.shape
     h, w = mask.shape
     if h > H or w > W:
         return None
-    pad = np.zeros_like(occ, dtype=float)
-    pad[:h, :w] = mask
-    corr = np.fft.irfft2(focc * np.conj(np.fft.rfft2(pad)), s=occ.shape)[:H - h + 1, :W - w + 1]
+    corr = np.fft.irfft2(focc * fmask, s=_fft_shape(occ.shape))[:H - h + 1, :W - w + 1]
     free = np.argwhere(corr < 0.5)
     if not len(free):
         return None
@@ -1103,7 +1132,8 @@ def _free_spot(occ: np.ndarray, focc, mask: np.ndarray) -> tuple[int, int] | Non
 
 
 def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGIN,
-           gap: float = NEST_GAP, res: float = NEST_RES) -> tuple[list[Page], int]:
+           gap: float = NEST_GAP, res: float = NEST_RES, turns: int = NEST_TURNS
+           ) -> tuple[list[Page], int]:
     """Col·loca les peces segons la seva forma real, no per capses.
 
     Converteix les coordenades a l'eix y cap avall de l'SVG fent una simetria (així el
@@ -1111,7 +1141,8 @@ def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGI
     cada pàgina les orientacions de capsa més petita (girades de 90 en 90°) i `NEST_TURNS`
     girs repartits, i es queda la posició que deixa la seva vora de baix més amunt
     (a igualtat, la que ocupa més quadres: la peça més ben encaixada). La pàgina és
-    una graella de quadres de `res` mm; la cerca de lloc lliure es fa amb FFT.
+    una graella de quadres de `res` mm; la cerca de lloc lliure es fa amb FFT. Les peces
+    idèntiques (suports repetits) comparteixen les màscares ja calculades.
     Retorna també quantes peces no caben a l'àrea imprimible.
     """
     W, H = page[0] - 2 * margin, page[1] - 2 * margin
@@ -1122,31 +1153,43 @@ def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGI
         p.transform(lambda x: x * np.array([1.0, -1.0]))
     order = sorted(pieces, key=lambda p: -piece_outline(p).area)
 
-    sheets: list[tuple[Page, np.ndarray]] = []
+    sheets: list[list] = []  # [pàgina, ocupació, fft de l'ocupació]
     big: list[Page] = []
+    cache: dict[bytes, list] = {}
     for p in order:
-        base = piece_outline(p).buffer(gap / 2)
-        pts = p.points()
-        fit = _fit_angle(pts, W, H)
-        angles = [] if fit is None else [fit, fit + math.pi / 2]
-        for ang, _, _ in _rotations(pts)[:2]:
-            angles += [ang + k * math.pi / 2 for k in range(4)]
-        # Les peces ramificades encaixen millor amb més girs.
-        angles += [k * 2 * math.pi / NEST_TURNS for k in range(NEST_TURNS)]
-        options = []
-        for ang in angles:
-            geom = affinity.rotate(base, ang, origin=(0, 0), use_radians=True)
-            mask, origin = _raster(geom, res)
-            options.append((ang, mask, origin))
+        outline = piece_outline(p)
+        shape_key = shapely.to_wkb(shapely.set_precision(outline, 1e-3))
+        options = cache.get(shape_key)
+        if options is None:
+            base = outline.buffer(gap / 2)
+            pts = p.points()
+            fit = _fit_angle(pts, W, H)
+            angles = [] if fit is None else [fit, fit + math.pi / 2]
+            small = outline.area < NEST_SMALL * W * H
+            for ang, _, _ in _rotations(pts)[:1 if small else 2]:
+                angles += [ang + k * math.pi / 2 for k in range(4)]
+            if not small:  # les peces grans i ramificades encaixen millor amb més girs
+                angles += [k * 2 * math.pi / turns for k in range(turns)]
+            options = []
+            for ang in angles:
+                geom = affinity.rotate(base, ang, origin=(0, 0), use_radians=True)
+                mask, origin = _raster(geom, res)
+                if mask.shape[0] <= Hn and mask.shape[1] <= Wn:
+                    options.append((ang, mask, origin, _mask_fft((Hn, Wn), mask)))
+            cache[shape_key] = options
 
         placed = False
-        for page_obj, occ in sheets + [(None, None)]:
-            if page_obj is None:  # pàgina nova
+        for sheet in sheets + [None]:
+            if sheet is None:  # pàgina nova
                 occ = np.zeros((Hn, Wn), dtype=bool)
-            focc = np.fft.rfft2(occ.astype(float))
+                sheet = [None, occ, _occ_fft(occ)]
+            page_obj, occ, focc = sheet
+            free = occ.size - int(occ.sum())
             best = None
-            for ang, mask, origin in options:
-                spot = _free_spot(occ, focc, mask)
+            for ang, mask, origin, fmask in options:
+                if mask.sum() > free:
+                    continue
+                spot = _free_spot(occ, focc, mask, fmask)
                 if spot is not None:
                     key = (spot[0] + mask.shape[0], -int(mask.sum()), spot[1])
                     if best is None or key < best[0]:
@@ -1159,9 +1202,10 @@ def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGI
             dx, dy = margin - pad + j * res - ox, margin - pad + i * res - oy
             p.transform(lambda x, R=R, d=np.array([dx, dy]): x @ R + d)
             occ[i:i + mask.shape[0], j:j + mask.shape[1]] |= mask
+            sheet[2] = _occ_fft(occ)
             if page_obj is None:
-                page_obj = Page()
-                sheets.append((page_obj, occ))
+                sheet[0] = page_obj = Page()
+                sheets.append(sheet)
             page_obj.pieces.append(p)
             placed = True
             break
@@ -1180,10 +1224,11 @@ def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGI
             lo = p.points().min(axis=0)
             p.transform(lambda x, lo=lo: x - lo + margin)
             if fits:
-                sheets.append((Page([p]), np.ones((Hn, Wn), dtype=bool)))
+                full = np.ones((Hn, Wn), dtype=bool)
+                sheets.append([Page([p]), full, _occ_fft(full)])
             else:
                 big.append(Page([p]))
-    return [pg for pg, _ in sheets] + big, len(big)
+    return [sh[0] for sh in sheets] + big, len(big)
 
 
 def _pts(a: np.ndarray) -> str:
