@@ -2,3 +2,4 @@ streamlit
 trimesh
 numpy
 shapely
+fast-simplification
