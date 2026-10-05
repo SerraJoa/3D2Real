@@ -651,6 +651,78 @@ def merge_pieces(mesh: trimesh.Trimesh, pieces: list[Piece], owner: np.ndarray,
     return [pieces[i] for i in keep], np.array([remap[o] for o in owner])
 
 
+# ---------------------------------------------------------------- zones que tanquen problemes
+
+PATCH_PATH = 6     # cares màximes entre dos problemes per ajuntar-los en una mateixa zona
+PATCH_ROUNDS = 4   # rondes màximes de buscar problemes nous i ampliar les zones
+
+
+def problem_faces(pieces: list[Piece], region: np.ndarray | None = None) -> set[int]:
+    """Cares que han quedat en peces petites (fora de zones ja fetes): on el desplegament falla."""
+    return {fi for p in pieces if len(p.tris) <= SMALL_PIECE for fi in p.tris
+            if region is None or region[fi] == 0}
+
+
+def problem_zones(mesh: trimesh.Trimesh, problems: set[int], max_path: int = PATCH_PATH,
+                  base: np.ndarray | None = None) -> np.ndarray:
+    """Agrupa els problemes propers en zones petites: 0 = resta del model, 1..k = zones.
+
+    Cada zona comença en un problema i hi va afegint el camí de cares més curt fins al
+    problema lliure més proper, si és a menys de `max_path` cares. Surten tires o arbres
+    estrets: tots els seus vèrtexs queden a la vora, així que es despleguen sense
+    escletxes, i en treure-les de la resta, els vèrtexs problemàtics també hi queden a la vora.
+    Amb `base` (zones per línies marcades), un camí no travessa d'una zona marcada a una altra.
+    """
+    c = mesh.triangles_center
+    adj: list[list[tuple[float, int]]] = [[] for _ in mesh.faces]
+    for e, fs in edge_faces(mesh.faces).items():
+        if len(fs) == 2 and (base is None or base[fs[0]] == base[fs[1]]):
+            a, b = fs
+            d = float(np.linalg.norm(c[a] - c[b]))
+            adj[a].append((d, b))
+            adj[b].append((d, a))
+    zone = np.zeros(len(mesh.faces), dtype=int)
+    left = set(problems)
+    k = 0
+    for p in sorted(problems):
+        if p not in left:
+            continue
+        k += 1
+        patch = {p}
+        left.discard(p)
+        zone[p] = k
+        while True:
+            dist = {f: 0.0 for f in patch}
+            hops = {f: 0 for f in patch}
+            prev: dict[int, int] = {}
+            heap = [(0.0, f) for f in patch]
+            hit = None
+            while heap:
+                d, v = heapq.heappop(heap)
+                if d > dist[v]:
+                    continue
+                if v in left:
+                    hit = v
+                    break
+                if hops[v] >= max_path:
+                    continue
+                for w, u in adj[v]:
+                    if zone[u] not in (0, k):
+                        continue
+                    if d + w < dist.get(u, math.inf):
+                        dist[u], hops[u], prev[u] = d + w, hops[v] + 1, v
+                        heapq.heappush(heap, (d + w, u))
+            if hit is None:
+                break
+            v = hit
+            while v not in patch:
+                patch.add(v)
+                zone[v] = k
+                left.discard(v)
+                v = prev[v]
+    return zone
+
+
 # ---------------------------------------------------------------- pestanyes i línies
 
 def _edge_in_face(F, fi: int, coords: np.ndarray, e) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1098,27 +1170,60 @@ class Result:
         return buf.getvalue()
 
 
+def _score(pieces: list[Piece], stats: dict) -> float:
+    """Com més baix, millor: poques peces, poques de petites i pestanyes senceres."""
+    small = sum(1 for p in pieces if len(p.tris) <= SMALL_PIECE)
+    return (len(pieces) + 2 * small + 5 * stats["sense_pestanya"]
+            + 0.5 * stats["pestanyes_retallades"])
+
+
 def make_papercraft(mesh: trimesh.Trimesh, target_faces: int, size_mm: float,
                     tab_mm: float = 5.0, page: str = "A4", landscape: bool = False,
-                    face_numbers: bool = False, lines_deg: float = 0.0) -> Result:
+                    face_numbers: bool = False, lines_deg: float = 0.0,
+                    problem_zones_on: bool = True) -> Result:
     """Desplega la malla i la posa en pàgines.
 
-    Amb `lines_deg` > 0, primer parteix per les línies naturals (arestes que pleguen més
-    d'aquest angle), desplega cada zona per separat i després torna a unir les peces per
-    aquestes línies mentre hi càpiguen. Així, quan cal tallar, es talla per les línies.
+    - `lines_deg` > 0: primer parteix per les arestes que pleguen més d'aquest angle,
+      desplega cada zona per separat i després torna a unir les peces mentre hi càpiguen.
+    - `problem_zones_on`: on el desplegament deixa peces petites, tanca els problemes
+      propers en zones pròpies (tires estretes) i torna a desplegar; ho repeteix amb els
+      problemes nous i es queda el millor resultat.
     """
     m = scale_to(simplify(clean(mesh), target_faces), size_mm)
     size = PAGES[page][::-1] if landscape else PAGES[page]
     room = (size[0] - 2 * MARGIN - 2 * tab_mm, size[1] - 2 * MARGIN - 2 * tab_mm)
-    zones = natural_zones(m, lines_deg) if lines_deg > 0 else None
-    pieces, owner = unfold(m, room, tab_mm, zones)
-    pieces, owner = absorb_small(m, pieces, owner, room, tab_mm, region=zones)
-    if zones is not None:
+    lines = natural_zones(m, lines_deg) if lines_deg > 0 else None
+
+    def attempt(region):
+        pieces, owner = unfold(m, room, tab_mm, region)
+        pieces, owner = absorb_small(m, pieces, owner, room, tab_mm, region=region)
+        return pieces, owner
+
+    pieces, owner = attempt(lines)
+    if lines is not None:
         pieces, owner = merge_pieces(m, pieces, owner, room, tab_mm)
-    stats = add_tabs_and_lines(m, pieces, owner, tab_mm)
+    best = (pieces, owner, add_tabs_and_lines(m, pieces, owner, tab_mm), 0)
+
+    if problem_zones_on:
+        problems = problem_faces(pieces)
+        for _ in range(PATCH_ROUNDS):
+            if not problems:
+                break
+            zones = problem_zones(m, problems, base=lines)
+            base = lines if lines is not None else np.zeros(len(m.faces), dtype=int)
+            region = np.where(zones > 0, base.max() + 1 + zones, base)
+            pieces, owner = attempt(region)
+            stats = add_tabs_and_lines(m, pieces, owner, tab_mm)
+            if _score(pieces, stats) < _score(best[0], best[2]):
+                best = (pieces, owner, stats, int(zones.max()))
+            new = problem_faces(pieces, zones)
+            if not new - problems:
+                break
+            problems |= new
+
+    pieces, owner, stats, n_zones = best
     pages, oversize = layout(pieces, size)
     stats.update(peces=len(pieces), pagines=len(pages), massa_grans=oversize,
-                 zones=int(zones.max()) + 1 if zones is not None else 1,
-                 peces_petites=sum(1 for p in pieces if len(p.tris) <= SMALL_PIECE))
+                 zones=n_zones, peces_petites=sum(1 for p in pieces if len(p.tris) <= SMALL_PIECE))
     svgs = [page_svg(pg, size, i, len(pages), face_numbers) for i, pg in enumerate(pages, 1)]
     return Result(svgs, pieces, len(m.faces), stats)

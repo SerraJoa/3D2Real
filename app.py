@@ -23,21 +23,25 @@ if uploaded:
             landscape = st.checkbox("Apaïsat")
         with c3:
             tab = st.slider("Amplada de pestanyes (mm)", 2.0, 12.0, 5.0, 0.5)
-            lines = st.slider("Línies naturals — angle mínim (°)", 0, 90, 40, 5,
-                              help="Les peces es tallen per les arestes que pleguen més d'aquest "
-                                   "angle i després es tornen a unir mentre hi càpiguen. "
-                                   "0 = no fer servir línies naturals.")
+            zones = st.checkbox("Zones naturals: tancar els problemes en peces petites", True,
+                                help="On el desplegament deixaria triangles solts, els agrupa en "
+                                     "tires estretes que es despleguen soles i resolen molts "
+                                     "problemes alhora.")
+            lines = st.slider("Tallar per arestes marcades — angle mínim (°)", 0, 90, 0, 5,
+                              help="Parteix primer per les arestes que pleguen més d'aquest "
+                                   "angle i després torna a unir les peces mentre hi càpiguen. "
+                                   "0 = no.")
             face_numbers = st.checkbox("Numerar les cares")
 
         if st.button("🚀 Generar desplegable", type="primary"):
             with st.spinner("Desplegant…"):
                 st.session_state["result"] = pc.make_papercraft(
-                    mesh, target, size, tab, page, landscape, face_numbers, lines)
+                    mesh, target, size, tab, page, landscape, face_numbers, lines, zones)
 
         r = st.session_state.get("result")
         if r:
             s = r.stats
-            st.success(f"{r.faces} cares · {s['zones']} zones naturals · {s['peces']} peces · "
+            st.success(f"{r.faces} cares · {s['peces']} peces ({s['zones']} zones naturals) · "
                        f"{s['pagines']} pàgines · "
                        f"{s['costures']} costures · {s['pestanyes']} pestanyes")
             st.caption(f"Pestanyes: {s['pestanyes_encongides']} encongides, "

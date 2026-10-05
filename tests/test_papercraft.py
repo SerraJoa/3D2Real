@@ -234,3 +234,23 @@ def test_linies_naturals_tallen_per_les_linies():
 def test_unir_peces_redueix_la_caixa_a_una_creu():
     r = pc.make_papercraft(MESHES["caixa"](), 400, 80, lines_deg=40)
     assert r.stats["peces"] == 1
+
+
+def test_zones_que_tanquen_problemes_ajunten_els_propers():
+    m = pc.clean(MESHES["esfera"]())
+    adj = pc.edge_faces(m.faces)
+    a = 0
+    b = next(f for f in adj[tuple(sorted(m.faces[a][:2]))] if f != a)  # veïna de 0
+    lluny = int(np.argmax(np.linalg.norm(m.triangles_center - m.triangles_center[a], axis=1)))
+    z = pc.problem_zones(m, {a, b, lluny}, max_path=6)
+    assert z[a] == z[b] > 0
+    assert z[lluny] > 0 and z[lluny] != z[a]
+    assert (z > 0).sum() == 3  # cap cara de més: el camí entre veïnes és directe
+
+
+def test_zones_que_tanquen_problemes_redueixen_peces_a_l_esfera():
+    sense = pc.make_papercraft(MESHES["esfera"](), 400, 120, problem_zones_on=False)
+    amb = pc.make_papercraft(MESHES["esfera"](), 400, 120)
+    assert amb.stats["peces"] <= sense.stats["peces"] / 2
+    assert amb.stats["peces_petites"] <= sense.stats["peces_petites"] / 4
+    assert amb.stats["sense_pestanya"] == 0

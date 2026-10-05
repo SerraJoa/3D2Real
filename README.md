@@ -19,11 +19,15 @@ streamlit run app.py
      escletxes on no es pot enganxar res;
    - si en tancar el ventall d'un vèrtex les dues vores coincideixen, l'aresta es plega.
 3. **Reenganxa** les peces molt petites a una veïna quan encara hi ha lloc per a pestanyes.
-   **Línies naturals** (opcional, per defecte 40° a la interfície): primer es parteix la
-   superfície per les arestes que pleguen més que l'angle triat, cada zona es desplega per
-   separat (les zones de menys del 2 % de l'àrea s'uneixen a una veïna) i després les peces
-   es tornen a unir per aquestes línies mentre hi càpiguen, no s'escampin i quedi lloc per
-   a les pestanyes. Així, quan cal tallar, es talla per les línies del model.
+   **Zones naturals** (activat per defecte): les cares que han quedat en peces petites són
+   els problemes. Els propers (a menys de 6 cares) s'ajunten amb el camí de cares més curt
+   en una zona pròpia: una tira o arbre estret, la peça més petita que en tanca el màxim
+   alhora. Una tira estreta té tots els vèrtexs a la vora i es desplega sense escletxes, i
+   en treure-la, els vèrtexs problemàtics de la resta també queden a la vora. Es repeteix
+   amb els problemes nous (fins a 4 rondes) i es queda el millor resultat.
+   **Arestes marcades** (opcional): es parteix primer per les arestes que pleguen més que
+   l'angle triat, cada zona es desplega per separat i després les peces es tornen a unir
+   mentre hi càpiguen, no s'escampin i quedi lloc per a les pestanyes.
 4. **Pestanyes**: un trapezi a un dels dos costats de cada costura. Els trossos d'una
    mateixa aresta comparteixen número. Si una pestanya topa:
    - només amb altres pestanyes i poc (≤35 % de l'àrea) → s'encongeix una mica;
@@ -45,9 +49,9 @@ streamlit run app.py
 
 ## Limitacions
 
-- En superfícies corbes sense línies marcades (esferes), tancar del tot el ventall d'un
-  vèrtex deixa una escletxa massa estreta per a una pestanya. El desplegable prefereix
-  deixar un triangle solt amb pestanyes: més peces, però totes es poden muntar.
+- En superfícies corbes (esferes), tancar del tot el ventall d'un vèrtex deixa una escletxa
+  massa estreta per a una pestanya. Les zones naturals ho resolen en gran part (esfera de
+  320 cares: de 42 peces a 11), però en poden quedar algunes de petites.
 - La col·locació a la pàgina fa servir capses rectangulars: peces corbes i llargues
   (anelles d'un tor) aprofiten poc el paper.
 - Una peça unida pot quedar amb forats interiors, que s'han de retallar per dins.
