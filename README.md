@@ -19,8 +19,11 @@ streamlit run app.py
      escletxes on no es pot enganxar res;
    - si en tancar el ventall d'un vèrtex les dues vores coincideixen, l'aresta es plega.
 3. **Reenganxa** les peces molt petites a una veïna quan encara hi ha lloc per a pestanyes.
-4. **Pestanyes**: un trapezi a un dels dos costats de cada costura, retallat si topa amb
-   una altra cara. Els trossos d'una mateixa aresta comparteixen número.
+4. **Pestanyes**: un trapezi a un dels dos costats de cada costura. Els trossos d'una
+   mateixa aresta comparteixen número. Si una pestanya topa:
+   - només amb altres pestanyes i poc (≤35 % de l'àrea) → s'encongeix una mica;
+   - només amb altres pestanyes i molt → es passa a l'altre costat de la costura;
+   - amb una cara, o no hi ha cap altra opció → es retalla.
 5. **Pàgines**: gira cada peça a la capsa mínima i les col·loca en prestatges (A4, A3, Carta).
 
 ## Llegenda

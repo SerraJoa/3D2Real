@@ -134,3 +134,44 @@ def test_simplifica_malles_grans():
     r = pc.make_papercraft(trimesh.creation.icosphere(4, radius=30), 300, 120)
     assert r.faces <= 300
     assert r.stats["sense_pestanya"] <= 0.05 * r.stats["arestes_tallades"]
+
+
+def _peca_amb_pestanya(obstacle):
+    """Una cara amb l'aresta AB a y=0 (pestanya cap a y<0) i una pestanya ja posada."""
+    p = pc.Piece()
+    tri = np.array([[0.0, 0.0], [10.0, 0.0], [5.0, 5.0]])
+    p.place(0, tri, Polygon(tri))
+    p.tabs.append(np.array(obstacle))
+    p.tab_shapes.add(p.shapes.add(Polygon(obstacle)))
+    return p, tri
+
+
+def test_pestanya_que_topa_poc_amb_una_altra_s_encongeix():
+    p, (A, B, C) = _peca_amb_pestanya([(6, -5), (12, -5), (12, -4.2), (6, -4.2)])
+    poly, frac, how = pc.fit_tab(p, 0, A, B, C, 5.0, clip=False)
+    assert how == "encongida"
+    assert 0.5 < frac < 1
+    assert not p.shapes.hits(Polygon(poly))
+    assert np.allclose(sorted(map(tuple, poly))[:1], [(0, 0)])  # segueix enganxada a AB
+
+
+def test_pestanya_tapada_per_una_altra_canvia_de_costat():
+    p, (A, B, C) = _peca_amb_pestanya([(-1, -6), (11, -6), (11, -0.5), (-1, -0.5)])
+    assert pc.fit_tab(p, 0, A, B, C, 5.0, clip=False) is None
+
+
+def test_pestanya_que_topa_amb_una_cara_no_s_encongeix_sino_que_es_retalla():
+    p = pc.Piece()
+    tri = np.array([[0.0, 0.0], [10.0, 0.0], [5.0, 5.0]])
+    p.place(0, tri, Polygon(tri))
+    other = np.array([[6.0, -5.0], [12.0, -5.0], [12.0, -4.2]])
+    p.place(1, other, Polygon(other))
+    assert pc.fit_tab(p, 0, *tri, 5.0, clip=False) is None
+    assert pc.fit_tab(p, 0, *tri, 5.0, clip=True)[2] == "retallada"
+
+
+def test_estadistiques_de_pestanyes(result):
+    _, r = result
+    s = r.stats
+    assert s["pestanyes_encongides"] + s["pestanyes_retallades"] <= s["pestanyes"]
+    assert s["pestanyes_canviades"] <= s["pestanyes"]

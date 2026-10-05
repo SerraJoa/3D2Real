@@ -151,6 +151,7 @@ class Piece:
     fold_lines: list[tuple[np.ndarray, str]] = field(default_factory=list)
     shapes: _Shapes = field(default_factory=_Shapes, repr=False)
     shape_of: dict[int, int] = field(default_factory=dict, repr=False)  # cara → índex a shapes
+    tab_shapes: set[int] = field(default_factory=set, repr=False)       # índexs de pestanyes
 
     def place(self, fi: int, coords: np.ndarray, poly: Polygon) -> None:
         self.tris[fi] = coords
@@ -447,33 +448,61 @@ def _edge_in_face(F, fi: int, coords: np.ndarray, e) -> tuple[np.ndarray, np.nda
     return coords[i0], coords[i1], coords[3 - i0 - i1]
 
 
-def tab_polygon(A: np.ndarray, B: np.ndarray, inside: np.ndarray, h: float) -> np.ndarray:
-    """Trapezi cap enfora de l'aresta AB (allunyat del punt `inside`)."""
+def tab_polygon(A: np.ndarray, B: np.ndarray, inside: np.ndarray, h: float,
+                inset_frac: float | None = None) -> np.ndarray:
+    """Trapezi cap enfora de l'aresta AB (allunyat del punt `inside`).
+
+    Cada extrem s'escurça `inset_frac` × L; per defecte, prou per tenir extrems a ≥45°.
+    """
     L = float(np.linalg.norm(B - A))
     u = (B - A) / L
     n = np.array([-u[1], u[0]])
     if np.dot(n, inside - A) > 0:
         n = -n
     h = min(h, 0.5 * L)
-    inset = min(h, 0.3 * L)  # extrems a ≥45°
+    inset = min(h, 0.3 * L) if inset_frac is None else max(min(h, 0.3 * L), inset_frac * L)
     return np.array([A, B, B - u * inset + n * h, A + u * inset + n * h])
 
 
 TAB_GAP = 0.4    # mm de separació entre una pestanya retallada i la cara que la talla
 TAB_MIN = 0.35   # fracció mínima de l'àrea d'una pestanya sencera perquè valgui la pena
 
+# Quan una pestanya només topa amb altres pestanyes: si el solapament és com a molt
+# aquesta fracció de la seva àrea, s'encongeix; si és més gran, es canvia de costat.
+TAB_SHRINK_MAX = 0.35
+# Encongiments que es proven: (fracció de l'alçada, fracció de l'aresta per a cada extrem).
+TAB_SHRINKS = ((0.85, None), (0.7, 0.35), (0.85, 0.4), (0.55, 0.4))
 
-def fit_tab(p: Piece, fi: int, A, B, C, h: float) -> tuple[np.ndarray, float] | None:
-    """Pestanya per a l'aresta AB de la cara `fi`, retallada si topa amb la peça.
 
-    Retorna el polígon i la fracció d'àrea respecte de la pestanya sencera.
+def fit_tab(p: Piece, fi: int, A, B, C, h: float, clip: bool = True
+            ) -> tuple[np.ndarray, float, str] | None:
+    """Pestanya per a l'aresta AB de la cara `fi`.
+
+    Retorna el polígon, la fracció d'àrea respecte de la pestanya sencera i com s'ha fet:
+    "sencera"; "encongida" si només topava una mica amb altres pestanyes; "retallada"
+    (només amb `clip`) si topava amb cares o massa amb pestanyes. Sense `clip`, una
+    pestanya que topa amb cares o que queda tapada per altres pestanyes retorna None,
+    perquè qui crida provi l'altre costat de la costura.
     """
     full = Polygon(tab_polygon(A, B, C, h))
     own = p.shape_of[fi]
-    blockers = [p.shapes.polys[i] for i in p.shapes.near(full) if i != own]
-    blockers = [q for q in blockers if q.intersection(full).area > 1e-9]
-    if not blockers:
-        return np.array(full.exterior.coords[:-1]), 1.0
+    hit = [i for i in p.shapes.near(full)
+           if i != own and p.shapes.polys[i].intersection(full).area > 1e-9]
+    if not hit:
+        return np.array(full.exterior.coords[:-1]), 1.0, "sencera"
+    blockers = [p.shapes.polys[i] for i in hit]
+
+    only_tabs = all(i in p.tab_shapes for i in hit)
+    if only_tabs:
+        overlap = unary_union(blockers).intersection(full).area / full.area
+        if overlap <= TAB_SHRINK_MAX:
+            for k, inset in TAB_SHRINKS:
+                small = Polygon(tab_polygon(A, B, C, h * k, inset))
+                if small.is_valid and not p.shapes.hits(small):
+                    return np.array(small.exterior.coords[:-1]), small.area / full.area, "encongida"
+    if not clip:
+        return None
+
     rest = full.difference(unary_union(blockers).buffer(TAB_GAP))
     base = LineString([A, B])
     parts = [g for g in getattr(rest, "geoms", [rest])
@@ -486,7 +515,7 @@ def fit_tab(p: Piece, fi: int, A, B, C, h: float) -> tuple[np.ndarray, float] | 
     frac = best.area / full.area
     if frac < TAB_MIN or best.geom_type != "Polygon":
         return None
-    return np.array(best.exterior.coords[:-1]), frac
+    return np.array(best.exterior.coords[:-1]), frac, "retallada"
 
 
 def _outline_without(poly: np.ndarray, A: np.ndarray, B: np.ndarray) -> list[np.ndarray]:
@@ -561,7 +590,8 @@ def add_tabs_and_lines(mesh: trimesh.Trimesh, pieces: list[Piece], owner: np.nda
 
     numbers = group_seams(mesh, seams)
     stats = dict(costures=len(set(numbers)), arestes_tallades=len(seams),
-                 pestanyes=0, sense_pestanya=0)
+                 pestanyes=0, sense_pestanya=0, pestanyes_encongides=0,
+                 pestanyes_canviades=0, pestanyes_retallades=0)
     # On posar el número: a l'aresta més llarga de cada costura, a cada costat.
     longest: dict[tuple[int, int], tuple[float, int]] = {}
     for i, ((e, a, b), n) in enumerate(zip(seams, numbers)):
@@ -576,22 +606,31 @@ def add_tabs_and_lines(mesh: trimesh.Trimesh, pieces: list[Piece], owner: np.nda
         # Pestanya al mateix costat que la resta de la costura si hi cap sencera;
         # si no, al costat on en cap més, encara que sigui retallada.
         sides = (a, b) if tab_side.get(n, patch[a]) == patch[a] else (b, a)
+        # 1) sencera o una mica encongida, primer al costat preferit i si no a l'altre;
+        # 2) si no, la més gran retallada dels dos costats.
         best = None
-        for fi in sides:
-            p = pieces[owner[fi]]
-            A, B, C = _edge_in_face(F, fi, p.tris[fi], e)
-            tab = fit_tab(p, fi, A, B, C, tab_mm)
-            if tab is not None and (best is None or tab[1] > best[1]):
-                best = (fi, tab[1], tab[0], A, B)
-            if tab is not None and tab[1] >= 0.999:
+        for clip in (False, True):
+            for fi in sides:
+                p = pieces[owner[fi]]
+                A, B, C = _edge_in_face(F, fi, p.tris[fi], e)
+                tab = fit_tab(p, fi, A, B, C, tab_mm, clip)
+                if tab is not None and (best is None or tab[1] > best[1]):
+                    best = (fi, tab[1], tab[0], A, B, tab[2])
+                if tab is not None and not clip:
+                    break
+            if best is not None:
                 break
         tabbed = None
         if best is not None:
-            tabbed, _, poly, A, B = best
+            tabbed, _, poly, A, B, how = best
+            if how != "sencera":
+                stats[f"pestanyes_{how[:-1]}es"] += 1
+            if tabbed != sides[0]:
+                stats["pestanyes_canviades"] += 1
             tab_side.setdefault(n, int(patch[tabbed]))
             p = pieces[owner[tabbed]]
             p.tabs.append(poly)
-            p.shapes.add(Polygon(poly))
+            p.tab_shapes.add(p.shapes.add(Polygon(poly)))
             # La pestanya es doblega enrere, sota la cara veïna.
             p.fold_lines.append((np.array([A, B]), "muntanya"))
             p.cuts.extend(_outline_without(poly, A, B))
