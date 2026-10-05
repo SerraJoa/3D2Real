@@ -467,19 +467,91 @@ def _basis(n: np.ndarray, hint: np.ndarray):
     return u, np.cross(n, u)
 
 
+def decorate_plates(m, plates: dict, to2d, footprints: dict, decor: dict | None, texture):
+    """Grava i/o talla les decoracions de cada cara a la seva placa.
+
+    Retorna (imatges per a les planxes, plaques amb gravat decoratiu, forats tallats).
+    Els forats sempre deixen un marc (decor.CUT_MIN_FRAME) i 2 mm lliures al voltant de
+    ranures i suports.
+    """
+    import dataclasses
+    import shapely
+    import decor as dc
+    images: dict = {}
+    face_up: set[int] = set()
+    n_holes = 0
+    if not decor:
+        return images, face_up, n_holes
+    V, F = m.vertices, m.faces
+    frames = dc.face_frames(m)
+    for k, spec in decor.items():
+        if k not in plates or k >= len(frames):
+            continue
+        fr, part = frames[k], plates[k]
+        f0 = fr.faces[0]
+        M = dc.affine_from(fr.to_local(V[F[f0]]), to2d(k, V[F[f0]]))
+        to_plate = lambda g, M=M: shapely.transform(g, lambda q: dc.apply_affine(M, q))
+        if spec.laser in ("gravar", "gravar i tallar"):
+            if spec.kind == "textura":
+                if texture is None:
+                    continue
+                images["tex"] = (dc._png(texture.image.convert("L")), *texture.image.size)
+                clip_l = fr.shape.buffer(-spec.frame) if spec.frame > 0 else fr.shape
+                for f, Mt in dc.texture_ops(fr, m, texture, spec):
+                    tri = Polygon(to2d(k, V[F[f]])).buffer(0.05)
+                    clip = tri.intersection(to_plate(clip_l)).intersection(part.shape)
+                    part.decor.append(dc.DecorOp(
+                        f'<use href="#tex" transform="{dc.svg_matrix(Mt)}"/>', M, clip))
+            else:
+                src = dc.build_source(fr, spec)
+                for key, png, w, h, _ in src.images:
+                    images[key] = (dc._png(__import__("PIL.Image", fromlist=["Image"]).open(
+                        __import__("io").BytesIO(png)).convert("L")), w, h)
+                part.decor.append(dc.DecorOp(dc.engrave_content(src, spec), M,
+                                             to_plate(src.clip).intersection(part.shape)))
+            face_up.add(k)
+        if spec.laser in ("tallar", "gravar i tallar") and spec.kind != "textura":
+            src = dc.build_source(fr, dataclasses.replace(spec, frame=max(spec.frame,
+                                                                          dc.CUT_MIN_FRAME)))
+            if src.holes is None or src.holes.is_empty:
+                continue
+            keep = [o.buffer(2.0) for o in footprints.get(k, [])]
+            keep += [Polygon(h).buffer(2.0) for g in getattr(part.shape, "geoms", [part.shape])
+                     for h in g.interiors]
+            # El marc es mesura des de la vora de la placa (ja retirada pel gruix), no de la cara.
+            inner = unary_union([Polygon(g.exterior) for g in getattr(part.shape, "geoms", [part.shape])])
+            holes = to_plate(src.holes).intersection(
+                inner.buffer(-max(spec.frame, dc.CUT_MIN_FRAME), join_style=2))
+            if keep:
+                holes = holes.difference(unary_union(keep))
+            holes = [h for h in getattr(holes, "geoms", [holes])
+                     if h.geom_type == "Polygon" and h.area > 1.0]
+            if holes:
+                part.shape = part.shape.difference(unary_union(holes))
+                n_holes += len(holes)
+    return images, face_up, n_holes
+
+
 JOINTS = ("encaix", "cola")
 
 
 def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickness: float = 3.0,
                gap: float = 0.0, bracket_mm: float = 25.0, sheet=(600.0, 400.0),
-               joint: str = "encaix") -> LaserResult:
+               joint: str = "encaix", decor: dict | None = None, texture=None) -> LaserResult:
     """Plaques i suports per a làser.
 
     `joint`: "encaix" = suports en arc amb tenons que entren en ranures de les plaques (com
     més ferm; els tenons es veuen com a petits rectangles a la cara de fora); "cola" =
     suports en estel enganxats per dins (del tot invisibles).
+
+    `decor` ({índex de placa: decor.DecorSpec}) grava o talla textures, imatges, patrons o
+    dibuixos a les cares; `texture` és la decor.Texture de la malla original.
     """
-    m = pc.scale_to(pc.simplify(pc.clean(mesh), target_faces), size_mm)
+    if texture is not None:
+        import decor as dc
+        m, texture = dc.prepare(mesh, target_faces, size_mm, texture)
+    else:
+        m = pc.scale_to(pc.simplify(pc.clean(mesh), target_faces), size_mm)
     V, F = m.vertices, m.faces
     em = pc.edge_faces(F)
     patch = pc.flat_patches(m, em)
@@ -756,22 +828,33 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
             brackets += 1
     parts += ribs
 
-    # Les marques van a la cara interior, que queda amunt en tallar: vista des de dins.
-    for part in plates.values():
-        part.transform(lambda x: x * np.array([-1.0, 1.0]))
+    images, face_up, decor_holes = decorate_plates(m, plates, to2d, footprints, decor, texture)
+
+    # Les marques van a la cara interior, que queda amunt en tallar: vista des de dins. Les
+    # plaques amb gravat decoratiu es tallen amb la cara de fora amunt (marques de referència).
+    for k, part in plates.items():
+        if k in face_up:
+            part.to_guides()
+        else:
+            part.transform(lambda x: x * np.array([-1.0, 1.0]))
 
     title = f"Cares · gruix {thickness:g} mm"
-    svgs, groups, oversize = nest(parts, sheet, title)
+    svgs, groups, oversize = nest(parts, sheet, title, images)
     groups_ = len({find(k) for k in plates})
     stats = dict(plaques=len(plates), suports=brackets, costelles=len(ribs), ranures=slots,
                  arestes=len(seams),
                  grups_de_plaques=groups_, mitges_fustes=laps_made[0],
+                 decorades=len({k for k in (decor or {}) if k in plates}),
+                 forats_decoratius=decor_holes,
                  arestes_sense_suport=no_bracket, plaques_perdudes=lost,
                  planxes=len(svgs), massa_grans=oversize)
     notes = [f"Gruix del material: {thickness:g} mm · espai entre cares: {gap:g} mm",
              f"{len(plates)} plaques (C), {brackets} suports (S) i {len(ribs)} costelles (K).",
              "Cada costella (K) travessa amb un tenó les plaques que tenen gravat el seu número.",
              "Les marques gravades van per dins. Cada suport porta el número d'aresta (a) i va",
+             *([f"Les plaques {', '.join(f'C{k + 1}' for k in sorted(face_up))} porten gravat "
+                "decoratiu: es tallen amb la cara de fora amunt i les seves marques de muntatge "
+                "(en verd) són només de referència."] if face_up else []),
              "a les dues plaques que tenen aquell número, sobre el rectangle gravat"
              + (": els tenons entren a les ranures." if joint == "encaix" else ", enganxat.")]
     res = LaserResult(svgs, parts, stats, notes, groups)

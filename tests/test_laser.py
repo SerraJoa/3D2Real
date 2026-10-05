@@ -202,10 +202,10 @@ def test_suports_i_costelles_encaixen_a_mitja_fusta_sense_solapar():
             calls.append((c, seam, plane))
         return res
 
-    def nest_spy(parts, sheet, title):
+    def nest_spy(parts, sheet, title, images=None):
         seen.update({id(p): p.shape for p in parts})
         seen["parts"] = parts
-        return orig_nest(parts, sheet, title)
+        return orig_nest(parts, sheet, title, images)
 
     cares.half_lap, cares.nest = spy, nest_spy
     try:

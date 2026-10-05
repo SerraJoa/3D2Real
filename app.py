@@ -3,9 +3,11 @@ import base64
 import streamlit as st
 
 import cares
+import decor as dc
 import laminacio
 import laser
 import papercraft as pc
+import vista
 
 st.set_page_config(page_title="Desplegables", layout="wide")
 st.title("✂️ Desplegables — 3D → paper i làser")
@@ -21,28 +23,149 @@ def show(svgs: list[str], label: str) -> None:
                     unsafe_allow_html=True)
 
 
-uploaded = st.file_uploader("Carrega STL o OBJ", type=["stl", "obj"])
-if uploaded:
+def svg_img(svg: str, width: str = "100%") -> None:
+    st.markdown(f'<img src="data:image/svg+xml;base64,{base64.b64encode(svg.encode()).decode()}" '
+                f'style="width:{width}"/>', unsafe_allow_html=True)
+
+
+def ranges(ks: list[int]) -> str:
+    """[0, 1, 2, 5] → "C1–C3, C6"."""
+    out, start = [], None
+    for i, k in enumerate(ks):
+        if start is None:
+            start = k
+        if i == len(ks) - 1 or ks[i + 1] != k + 1:
+            out.append(f"C{start + 1}" if start == k else f"C{start + 1}–C{k + 1}")
+            start = None
+    return ", ".join(out)
+
+
+def decor_panel(m, frames, has_texture: bool, laser_branch: bool) -> dict:
+    """Assignació de decoracions a les cares. Retorna {índex de cara: DecorSpec}."""
+    sig = (len(m.faces), len(frames), round(float(m.area), 1))
+    if st.session_state.get("decor_sig") != sig:  # la malla ha canviat: les cares també
+        st.session_state["decor"] = {}
+        st.session_state["decor_sig"] = sig
+    decor: dict = st.session_state["decor"]
+    with st.expander(f"🎨 Decoració de les cares ({len(decor)} decorades)", expanded=bool(decor)):
+        v1, v2 = st.columns(2)
+        with v1:
+            svg_img(vista.faces_view(m, frames, set(decor), yaw=35, pitch=25), "95%")
+        with v2:
+            svg_img(vista.faces_view(m, frames, set(decor), yaw=215, pitch=-25), "95%")
+        names = [f"C{fr.index + 1}" for fr in frames]
+        chosen = st.multiselect("Cares", ["Totes"] + names, key="decor_faces")
+        targets = list(range(len(frames))) if "Totes" in chosen else \
+            [names.index(c) for c in chosen if c in names]
+        kinds = (["textura"] if has_texture else []) + ["imatge", "patró", "dibuix"]
+        kind = st.radio("Què", kinds, horizontal=True, key="decor_kind",
+                        format_func={"textura": "Textura del model", "imatge": "Imatge",
+                                     "patró": "Patró", "dibuix": "Dibuix a mà"}.get)
+        spec = dc.DecorSpec(kind=kind)
+        c1, c2 = st.columns(2)
+        with c1:
+            spec.frame = st.number_input("Marc (mm, 0 = sense marc)", 0.0, 50.0, 0.0, 0.5,
+                                         key="decor_frame")
+            if laser_branch:
+                spec.laser = st.radio("Al làser", dc.LASER_MODES, horizontal=True, key="decor_laser",
+                                      help="Tallar deixa sempre un marc de 3 mm com a mínim i "
+                                           "respecta ranures i suports.")
+        with c2:
+            if kind == "imatge":
+                up = st.file_uploader("Imatge", type=["png", "jpg", "jpeg"], key="decor_img")
+                spec.image = up.getvalue() if up else None
+                spec.fit = st.radio("Ajust", ["omplir", "encabir"], horizontal=True, key="decor_fit")
+                if laser_branch:
+                    spec.threshold = st.slider("Tallar: més fosc que", 0, 255, 128, key="decor_thr")
+            elif kind == "patró":
+                spec.pattern = st.selectbox("Patró", dc.PATTERNS, key="decor_pat")
+                if spec.pattern == "text":
+                    spec.text = st.text_input("Text", key="decor_text")
+                elif spec.pattern != "color":
+                    spec.spacing = st.number_input("Separació (mm)", 1.0, 100.0, 6.0, 0.5,
+                                                   key="decor_sp")
+                    spec.width = st.number_input("Gruix (mm)", 0.1, 20.0, 1.5, 0.1, key="decor_w")
+                    if spec.pattern in ("ratlles", "quadrícula"):
+                        spec.angle = st.slider("Angle (°)", 0, 180, 45, key="decor_ang")
+                spec.color = st.color_picker("Color (paper)", "#1f4e79", key="decor_col")
+            elif kind == "dibuix":
+                spec.width = st.number_input("Gruix del traç (mm)", 0.1, 20.0, 1.0, 0.1,
+                                             key="decor_dw")
+                spec.color = st.color_picker("Color (paper)", "#1f4e79", key="decor_dcol")
+        if kind == "dibuix":
+            if len(targets) != 1:
+                st.info("Tria una sola cara per dibuixar-hi.")
+            else:
+                import dibuix
+                k = targets[0]
+                prev = decor.get(k)
+                old = prev.strokes if prev is not None and prev.kind == "dibuix" else []
+                st.caption(f"Dibuixa sobre C{k + 1} (vista des de fora, amunt = amunt del model)")
+                spec.strokes = dibuix.draw_on_face(frames[k].shape, f"dib_{k}_{sig}", old,
+                                                   spec.color)
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("Aplica a les cares triades", disabled=not targets):
+                if kind == "imatge" and not spec.image:
+                    st.warning("Carrega una imatge primer.")
+                else:
+                    for k in targets:
+                        decor[k] = spec
+                    st.rerun()
+        with b2:
+            if st.button("Treu la decoració de les cares triades", disabled=not targets):
+                for k in targets:
+                    decor.pop(k, None)
+                st.rerun()
+        if decor:
+            groups: dict = {}
+            for k, d in sorted(decor.items()):
+                desc = ({"textura": "textura", "imatge": "imatge", "dibuix": "dibuix"}.get(d.kind)
+                        or f"patró {d.pattern}") + \
+                    (f", marc {d.frame:g} mm" if d.frame else ", sense marc") + \
+                    (f", {d.laser}" if laser_branch else "")
+                groups.setdefault(desc, []).append(k)
+            st.caption("Decorades — " + " · ".join(f"{ranges(ks)}: {desc}" for desc, ks in groups.items()))
+    return decor
+
+
+uploaded = st.file_uploader("Carrega el model: STL, OBJ (amb MTL i imatges per a la textura) o GLB",
+                            type=["stl", "obj", "mtl", "glb", "gltf", "png", "jpg", "jpeg"],
+                            accept_multiple_files=True)
+models = [u for u in (uploaded or []) if u.name.lower().endswith((".stl", ".obj", ".glb", ".gltf"))]
+if models:
     try:
         # ---- Fases comunes: importació i reducció
-        mesh = pc.load_mesh(uploaded.getvalue(), uploaded.name)
-        st.success(f"{len(mesh.faces):,} cares · {len(mesh.vertices):,} vèrtexs")
+        files = {u.name: u.getvalue() for u in uploaded}
+        if models[0].name.lower().endswith(".stl"):
+            mesh, texture = pc.load_mesh(models[0].getvalue(), models[0].name), None
+        else:
+            mesh, texture = dc.load_textured({k: v for k, v in files.items()
+                                              if k == models[0].name or
+                                              not k.lower().endswith((".stl", ".obj", ".glb"))})
+        st.success(f"{len(mesh.faces):,} cares · {len(mesh.vertices):,} vèrtexs"
+                   + (" · amb textura" if texture is not None else ""))
         c1, c2 = st.columns(2)
         with c1:
             maxf = max(10, len(mesh.faces))
             target = st.slider("Simplificació — nombre de cares", 10, maxf, max(10, min(maxf, 300)))
         with c2:
             size = st.number_input("Mida final — costat més llarg (mm)", 20.0, 2000.0, 120.0, 10.0)
+        prepared, _ = dc.prepare(mesh, target, size, None)
+        frames = dc.face_frames(prepared)
 
         branch = st.radio("Branca", ["📄 Desplegable de paper", "🔷 Cares (làser)",
                                      "🥞 Laminació (làser)"], horizontal=True)
+
+        decor = {} if branch.startswith("🥞") else \
+            decor_panel(prepared, frames, texture is not None, not branch.startswith("📄"))
 
         if branch.startswith("📄"):
             c1, c2 = st.columns(2)
             with c1:
                 page = st.selectbox("Paper", list(pc.PAGES))
                 landscape = st.checkbox("Apaïsat")
-                face_numbers = st.checkbox("Numerar les cares")
+                face_numbers = st.checkbox("Numerar les cares (C1, C2…)")
             with c2:
                 tab = st.slider("Amplada de pestanyes (mm)", 2.0, 12.0, 5.0, 0.5)
                 zones = st.checkbox("Zones naturals: tancar els problemes en peces petites", True,
@@ -53,7 +176,8 @@ if uploaded:
             if st.button("🚀 Generar desplegable", type="primary"):
                 with st.spinner("Desplegant…"):
                     st.session_state["paper"] = pc.make_papercraft(
-                        mesh, target, size, tab, page, landscape, face_numbers, lines, zones)
+                        mesh, target, size, tab, page, landscape, face_numbers, lines, zones,
+                        decor=decor, texture=texture)
             r = st.session_state.get("paper")
             if r:
                 s = r.stats
@@ -92,7 +216,8 @@ if uploaded:
                 if st.button("🚀 Generar cares", type="primary"):
                     with st.spinner("Tallant cares i suports…"):
                         st.session_state["cares"] = cares.make_faces(
-                            mesh, target, size, thickness, gap, bracket, laser.SHEETS[sheet], joint)
+                            mesh, target, size, thickness, gap, bracket, laser.SHEETS[sheet], joint,
+                            decor=decor, texture=texture)
                 r, prefix = st.session_state.get("cares"), "cares"
                 if r:
                     s = r.stats
@@ -100,7 +225,6 @@ if uploaded:
                                f"{s['costelles']} costelles · {s['mitges_fustes']} mitges fustes · "
                                f"{s['ranures']} ranures · "
                                f"{s['planxes']} planxes")
-                    import vista
                     st.markdown("**Grups de plaques** (un color per grup unit; vora negra = placa "
                                 "sense cap suport)")
                     v = vista.plates_view(r, width=260, yaw=25, pitch=25)
@@ -142,7 +266,8 @@ if uploaded:
                     st.warning(f"{r.stats['massa_grans']} peces no caben a la planxa.")
                 st.download_button("⬇️ Descarrega les planxes (SVG + muntatge en un ZIP)",
                                    r.zip_bytes(prefix), f"{prefix}.zip", "application/zip")
-                st.info("Vermell = tallar · blau = gravar.")
+                st.info("Vermell = tallar · blau = gravar · verd = només referència (plaques "
+                        "amb gravat decoratiu: es tallen amb la cara de fora amunt).")
                 with st.expander("Instruccions de muntatge"):
                     st.text("\n".join(r.notes))
                 show(r.sheets, "Planxa")
