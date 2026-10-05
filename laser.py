@@ -85,6 +85,7 @@ class LaserResult:
     stats: dict
     notes: list[str] = field(default_factory=list)   # llistes (tiges…) per a qui munta
     groups: list[list[Part]] = field(default_factory=list)
+    extra: dict = field(default_factory=dict)
 
     def zip_bytes(self, prefix: str) -> bytes:
         buf = io.BytesIO()

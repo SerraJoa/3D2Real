@@ -346,16 +346,21 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
         count = max(1, int(round(L / BRACKET_SPACING)))
         d3 = (seam.e1 - seam.e0) / L
         leg, centers = None, []
-        for f in (1.0, 0.75, 0.55, 0.4, 0.3):  # primer moure'l al llarg de l'aresta, després escurçar-lo
-            cand = min(bracket_mm, 0.5 * L) * f
-            if cand < 1.5 * thickness:
+        # Primer moure'l al llarg de l'aresta, després escurçar-lo. El suport ha de cabre
+        # dins de les dues plaques: en una punta estreta, un braç llarg en sortiria.
+        legs = [bracket_mm * f for f in (1.0, 0.75, 0.55, 0.4, 0.3)] + [2 * thickness, 1.5 * thickness]
+        for cand in sorted({round(x, 3) for x in legs if x >= 1.5 * thickness}, reverse=True):
+            # El braç va cap a dins de la placa: la mida la limita la placa, no l'aresta.
+            if L < thickness + 1.0:
                 break
             for shift in (0.0, -0.2, 0.2, -0.35, 0.35):
                 fr = [float(np.clip((i + 0.5 + shift) / count, 0.12, 0.88)) for i in range(count)]
                 cs = [seam.e0 + d3 * L * x for x in fr]
-                rects = [footprint(k, seam, c, s, cand) for k in (seam.p, seam.q) for c in cs]
-                if not any(r.buffer(0.5).intersects(o) for r in rects
-                           for k in (seam.p, seam.q) for o in footprints[k]):
+                rects = {k: [footprint(k, seam, c, s, cand) for c in cs] for k in (seam.p, seam.q)}
+                inside = all(k not in plates or plates[k].shape.buffer(0.3).contains(r)
+                             for k, rs in rects.items() for r in rs)
+                if inside and not any(r.buffer(0.5).intersects(o) for k, rs in rects.items()
+                                      for r in rs for o in footprints[k]):
                     leg, centers = cand, cs
                     break
             if leg is not None:
@@ -439,4 +444,9 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
              "Les marques gravades van per dins. Cada suport porta el número d'aresta (a) i va",
              "a les dues plaques que tenen aquell número, sobre el rectangle gravat"
              + (": els tenons entren a les ranures." if joint == "encaix" else ", enganxat.")]
-    return LaserResult(svgs, parts, stats, notes, groups)
+    res = LaserResult(svgs, parts, stats, notes, groups)
+    # Per a vistes i diagnosi: a quina placa va cada cara i a quin grup de plaques unides.
+    res.extra = dict(mesh=m, plate_of=plate_of,
+                     group={k: find(k) for k in range(n_plates)},
+                     supports={k: sum(1 for fp in footprints[k]) for k in range(n_plates)})
+    return res
