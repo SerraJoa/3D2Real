@@ -113,15 +113,21 @@ if uploaded:
             else:
                 with c2:
                     column = st.number_input("Diàmetre de les tiges (mm)", 1.0, 20.0, 5.0, 0.5)
+                    wall = st.number_input("Buidar: gruix de paret (mm, 0 = massís)", 0.0, 50.0,
+                                           6.0, 0.5,
+                                           help="Les capes es buiden deixant aquesta paret per tots "
+                                                "costats; les columnes queden dins d'una anella "
+                                                "unida a la paret.")
                 if st.button("🚀 Generar capes", type="primary"):
                     with st.spinner("Tallant capes…"):
                         st.session_state["capes"] = laminacio.make_layers(
-                            mesh, target, size, thickness, column, laser.SHEETS[sheet])
+                            mesh, target, size, thickness, column, laser.SHEETS[sheet], wall)
                 r, prefix = st.session_state.get("capes"), "capes"
                 if r:
                     s = r.stats
                     st.success(f"{s['capes']} capes · {s['peces']} peces · {s['columnes']} "
-                               f"columnes · {s['planxes']} planxes")
+                               f"columnes · {s['estalvi']} % de material estalviat · "
+                               f"{s['planxes']} planxes")
                     if s["peces_sense_columna"] or s["peces_amb_una_columna"]:
                         st.warning(f"{s['peces_amb_una_columna']} peces amb una sola columna i "
                                    f"{s['peces_sense_columna']} sense cap (massa estretes): "

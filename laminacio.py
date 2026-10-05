@@ -163,14 +163,82 @@ def _dashed(lines: list[np.ndarray], dash: float = 2.0, space: float = 1.5) -> l
     return out
 
 
+def hollow(geoms: list, wall: float, thickness: float, columns=(), column_d: float = 0.0) -> list:
+    """Buida les capes deixant una paret de `wall` mm per tots costats, també per dalt i baix.
+
+    El forat de cada capa és la seva secció retirada `wall`, intersecada amb la de les capes
+    veïnes fins a `wall` mm amunt i avall: així la cavitat no arriba mai a la superfície, i
+    les primeres i últimes capes (o les de sota d'un sostre pla) queden massisses.
+
+    Al voltant de cada columna que passa per la cavitat es deixa una anella de material
+    unida a la paret per un pont: les columnes no es mouen i cada capa continua sent una peça.
+    """
+    r = column_d / 2 + COLUMN_FIT
+    K = len(geoms)
+    reach = max(1, int(math.ceil(wall / thickness)))
+    eroded = [g.buffer(-wall) if not g.is_empty else Polygon() for g in geoms]
+    out = []
+    for k, g in enumerate(geoms):
+        hole = eroded[k]
+        for j in range(k - reach, k + reach + 1):
+            if hole.is_empty:
+                break
+            hole = hole.intersection(eroded[j]) if 0 <= j < K else Polygon()
+        hole = hole.buffer(0)
+        keep = []
+        for x, y, a, b in columns:
+            if a <= k <= b and not hole.is_empty and hole.buffer(r + COLUMN_WALL).contains(Point(x, y)):
+                p = Point(x, y)
+                edge = shapely.ops.nearest_points(p, g.exterior if g.geom_type == "Polygon"
+                                                  else g.boundary)[1]
+                keep += [p.buffer(r + COLUMN_WALL + 1.0, 32),
+                         LineString([p, edge]).buffer(max(wall, 2 * COLUMN_WALL) / 2)]
+        if keep:
+            hole = hole.difference(unary_union(keep))
+        # Forats massa petits no valen la pena.
+        hole = unary_union([h for h in getattr(hole, "geoms", [hole])
+                            if h.geom_type == "Polygon" and h.area > wall * wall])
+        out.append(_reconnect(g, g.difference(hole), max(wall, 2 * COLUMN_WALL))
+                   if not hole.is_empty else g)
+    return out
+
+
+def _reconnect(solid, hollowed, width: float):
+    """Si buidar ha partit un tros en diversos, els torna a unir amb ponts de paret."""
+    pieces = []
+    for isl in _islands(solid):
+        parts = [p for p in _islands(hollowed.intersection(isl))]
+        for _ in range(len(parts) + 2):
+            if len(parts) <= 1:
+                break
+            parts.sort(key=lambda p: p.area)
+            small, rest = parts[0], unary_union(parts[1:])
+            a, b = shapely.ops.nearest_points(small, rest)
+            # El pont s'allarga una mica perquè trepitgi les dues parts i no quedi tocant.
+            ab = np.array(b.coords[0]) - np.array(a.coords[0])
+            n = np.linalg.norm(ab)
+            ext = ab / n * width / 2 if n > 1e-9 else np.zeros(2)
+            line = LineString([np.array(a.coords[0]) - ext, np.array(b.coords[0]) + ext])
+            bridge = line.buffer(width / 2, cap_style=2).intersection(isl)
+            joined = _islands(unary_union([small, rest, bridge]))
+            if len(joined) >= len(parts):  # no s'ha pogut unir: es deixa com està
+                break
+            parts = joined
+        pieces += parts
+    return unary_union(pieces) if pieces else hollowed
+
+
 def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickness: float = 3.0,
-                column_d: float = 5.0, sheet=(600.0, 400.0)) -> LaserResult:
+                column_d: float = 5.0, sheet=(600.0, 400.0), wall: float = 0.0) -> LaserResult:
+    """Capes per apilar. Amb `wall` > 0 es buiden deixant una paret d'aquest gruix (mm)."""
     m = pc.scale_to(pc.simplify(pc.clean(mesh), target_faces), size_mm)
     z0, z1 = m.bounds[0][2], m.bounds[1][2]
     K = max(1, int(math.ceil((z1 - z0) / thickness - 1e-9)))
-    geoms = [slice_at(m, z0 + (k + 0.5) * thickness + 1e-7) for k in range(K)]
+    solid = [slice_at(m, z0 + (k + 0.5) * thickness + 1e-7) for k in range(K)]
+    # Les columnes es trien sobre les capes massisses i el buidat les respecta.
+    columns = place_columns([_islands(g) for g in solid], column_d)
+    geoms = hollow(solid, wall, thickness, columns, column_d) if wall > 0 else solid
     layers = [_islands(g) for g in geoms]
-    columns = place_columns(layers, column_d)
     r = column_d / 2 + COLUMN_FIT
 
     parts: list[Part] = []
@@ -205,12 +273,16 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
     title = f"Laminació · capes de {thickness:g} mm"
     svgs, groups, oversize = nest(parts, sheet, title)
     notes = [f"{K} capes de {thickness:g} mm ({len(parts)} peces). Munta de L1 (a baix) cap amunt,",
+             *([f"Buidades amb parets de {wall:g} mm: el contorn gravat de la capa veïna inclou el seu forat."]
+               if wall > 0 else []),
              "amb el número llegible a dalt i totes les fletxes cap al mateix costat.",
              "El contorn continu gravat a cada capa mostra on va la de sobre; el de ratlles, on és la de sota.",
              f"Tiges de Ø{column_d:g} mm (forats de Ø{2 * r:g} mm):"]
     for i, (x, y, a, b) in enumerate(columns, 1):
         notes.append(f"  columna {i}: capes L{a + 1}–L{b + 1}, llargada {(b - a + 1) * thickness:g} mm")
+    full = sum(g.area for g in solid)
     stats = dict(capes=K, peces=len(parts), columnes=len(columns),
+                 estalvi=round(100 * (1 - sum(g.area for g in geoms) / full)) if full else 0,
                  peces_amb_una_columna=one, peces_sense_columna=none, planxes=len(svgs),
                  massa_grans=oversize)
     return LaserResult(svgs, parts, stats, notes, groups)

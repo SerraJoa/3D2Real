@@ -84,6 +84,12 @@ streamlit run app.py
   diàmetres entre elles. Es dona la llista de tiges amb la llargada.
 - Gravat a la cara de dalt: número de capa (llegible = cara amunt), fletxa d'orientació
   comuna, contorn de la capa de sobre (continu) i de la de sota (ratlles).
+- **Buidar** (opcional, 6 mm a la interfície): cada capa perd la seva secció retirada un
+  gruix de paret, intersecada amb la de les capes veïnes fins a aquest gruix amunt i avall;
+  així la cavitat no arriba mai a la superfície i les capes de dalt i de baix fan de tapa.
+  Les columnes es trien abans de buidar: al voltant de cada una queda una anella de
+  material unida a la paret per un pont, i si el buidat parteix una capa, es torna a unir
+  amb un pont. Les peces petites poden anar dins la cavitat de les grans a la planxa.
 
 ## Llegenda (paper)
 

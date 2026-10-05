@@ -232,3 +232,45 @@ def test_suports_i_costelles_encaixen_a_mitja_fusta_sense_solapar():
             checked += int(near.sum())
     assert checked > 0
     assert all(p.shape.geom_type == "Polygon" for p in r.parts if p.name[0] in "SK")
+
+
+@pytest.fixture(scope="module")
+def capes_buides():
+    m = trimesh.creation.box((40, 30, 20))
+    return lm.make_layers(m, 400, 60, 3.0, 5.0, wall=6.0)
+
+
+def test_buidar_estalvia_material_i_deixa_tapes(capes_buides):
+    r = capes_buides
+    assert r.stats["estalvi"] > 30
+    holed = [p for p in r.parts if any(Polygon(h).area > 50 for h in p.shape.interiors)]
+    # 30 mm d'alçada amb parets de 6 mm: les dues capes de dalt i de baix són tapes massisses.
+    names = {p.name for p in holed}
+    for tapa in ("L1", "L2", "L9", "L10"):
+        assert tapa not in names
+    assert names
+
+
+def test_la_cavitat_no_arriba_a_la_superficie(capes_buides):
+    for p in capes_buides.parts:
+        for h in p.shape.interiors:
+            hole = Polygon(h)
+            if hole.area > 50:
+                assert hole.distance(p.shape.exterior) >= 6.0 - 1e-6
+
+
+def test_buidar_respecta_les_columnes_i_cada_capa_es_una_peca(capes_buides):
+    r = capes_buides
+    assert r.stats["peces"] == r.stats["capes"]
+    assert r.stats["peces_sense_columna"] == 0
+    for p in r.parts:
+        small = [Polygon(h) for h in p.shape.interiors if Polygon(h).area < 50]
+        assert len(small) >= lm.COLUMNS_PER_PIECE  # els forats de les columnes hi són
+
+
+def test_buidar_no_parteix_el_tor():
+    m = trimesh.creation.torus(30, 10, major_sections=16, minor_sections=8)
+    massis = lm.make_layers(m, 400, 120, 3.0, 5.0)
+    buit = lm.make_layers(m, 400, 120, 3.0, 5.0, wall=6.0)
+    assert buit.stats["peces"] == massis.stats["peces"]
+    assert buit.stats["estalvi"] > 0
