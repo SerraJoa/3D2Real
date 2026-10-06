@@ -91,6 +91,10 @@ streamlit run app.py
   igualar la millor, i les costelles candidates es reaprofiten d'una ronda a l'altra. Les
   alçades a menys de mig gruix l'una de l'altra i les direccions a menys de 2° es proven un
   sol cop (donen pràcticament la mateixa costella).
+- **Xamfrà a les cantonades** (1 mm per defecte a l'app): talla les cantonades que punxen del
+  contorn de plaques, suports i costelles. Les cantonades entrants, els forats, les ranures i
+  les osques no es toquen, perquè han d'encaixar. Cada costat es retalla com a molt un 40 %
+  per banda, perquè dos xamfrans veïns no es trepitgin.
 - **Cerca de costelles ràpida** (opcional): amb formes arrodonides hi ha moltes plaques
   petites i molts grups solts, i la cerca completa pot trigar molts minuts. La ràpida prova
   menys plans i s'atura als 10 s, però pot deixar més grups sense unir.

@@ -127,3 +127,18 @@ def test_suports_petits_quan_el_gran_no_hi_cap():
     assert r.stats["arestes_sense_suport"] == 0
     assert r.stats["suports"] > r.stats["arestes"]
     assert overlaps(visor.cares_solids(r)) == []
+
+
+def test_xamfra_a_les_cantonades():
+    """El xamfrà treu material a les cantonades del contorn, però no toca forats ni ranures."""
+    m = trimesh.creation.box((60, 40, 30))
+    sense = cares.make_faces(m, 200, 80, 3.0)
+    amb = cares.make_faces(m, 200, 80, 3.0, chamfer_mm=2.0)
+    a = {p.name: p.shape for p in sense.parts}
+    b = {p.name: p.shape for p in amb.parts}
+    assert a.keys() == b.keys()
+    for k in a:
+        assert b[k].area < a[k].area  # totes les peces tenen cantonades que punxen
+        holes = lambda g: sum(len(p.interiors) for p in getattr(g, "geoms", [g]))
+        assert holes(b[k]) == holes(a[k])
+    assert overlaps(visor.cares_solids(amb)) == []
