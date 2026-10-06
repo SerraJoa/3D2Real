@@ -215,7 +215,10 @@ def test_suports_i_costelles_encaixen_a_mitja_fusta_sense_solapar():
     assert r.stats["mitges_fustes"] > 0
     t, checked = 3.0, 0
     for c, seam, (origin, N, u, v, rparts) in calls:
-        mine = [p for p in seen["parts"] if p.name.startswith(f"S{seam.number}.")]
+        # Només els intents que són de debò un suport final (el que hi ha en aquest punt): en
+        # planificar se'n proven d'altres posicions que després es descarten.
+        mine = [p for p in seen["parts"] if p.name.startswith(f"S{seam.number}.")
+                and p.pose is not None and np.allclose(p.pose[0][:3, 3], c)]
         if len(mine) != 1:
             continue
         rib = shapely.union_all([seen[id(p)] for p in rparts])

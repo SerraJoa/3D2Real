@@ -129,16 +129,28 @@ def test_suports_petits_quan_el_gran_no_hi_cap():
     assert overlaps(visor.cares_solids(r)) == []
 
 
-def test_xamfra_a_les_cantonades():
-    """El xamfrà treu material a les cantonades del contorn, però no toca forats ni ranures."""
+def test_xamfra_de_plaques_i_de_tenons():
+    """El xamfrà de les plaques només toca les plaques (i, amb espai entre cares, la punta dels
+    suports que es veu per l'escletxa); el dels tenons, les puntes dels tenons. Cap toca forats
+    ni ranures, i el muntatge continua sense solapaments."""
     m = trimesh.creation.box((60, 40, 30))
-    sense = cares.make_faces(m, 200, 80, 3.0)
-    amb = cares.make_faces(m, 200, 80, 3.0, chamfer_mm=2.0)
-    a = {p.name: p.shape for p in sense.parts}
-    b = {p.name: p.shape for p in amb.parts}
-    assert a.keys() == b.keys()
-    for k in a:
-        assert b[k].area < a[k].area  # totes les peces tenen cantonades que punxen
-        holes = lambda g: sum(len(p.interiors) for p in getattr(g, "geoms", [g]))
-        assert holes(b[k]) == holes(a[k])
-    assert overlaps(visor.cares_solids(amb)) == []
+    holes = lambda g: sum(len(p.interiors) for p in getattr(g, "geoms", [g]))
+    sense = {p.name: p.shape for p in cares.make_faces(m, 200, 80, 3.0).parts}
+    plaques = {p.name: p.shape for p in cares.make_faces(m, 200, 80, 3.0, chamfer_mm=2.0).parts}
+    tenons = cares.make_faces(m, 200, 80, 3.0, tenon_chamfer=0.8)
+    for k, g in sense.items():
+        if k.startswith("C"):
+            assert plaques[k].area < g.area and holes(plaques[k]) == holes(g)
+        else:  # sense espai entre cares, els suports no es toquen
+            assert plaques[k].area == pytest.approx(g.area)
+    for p in tenons.parts:
+        if p.name.startswith("S"):
+            assert p.shape.area < sense[p.name].area  # puntes dels tenons
+        else:
+            assert p.shape.area == pytest.approx(sense[p.name].area)
+    assert overlaps(visor.cares_solids(tenons)) == []
+    # Amb espai entre cares, la punta del suport (que es veu) també porta xamfrà.
+    a = {p.name: p.shape for p in cares.make_faces(m, 200, 80, 3.0, gap=4.0).parts}
+    b = cares.make_faces(m, 200, 80, 3.0, gap=4.0, chamfer_mm=2.0)
+    assert all(p.shape.area < a[p.name].area for p in b.parts if p.name.startswith("S"))
+    assert overlaps(visor.cares_solids(b)) == []

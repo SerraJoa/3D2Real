@@ -248,10 +248,15 @@ if models:
                                         help="Amb els braços: pocs suports grans (distància i "
                                              "braços llargs) o molts de petits (curts i a prop), "
                                              "que caben millor a les plaques estretes.")
-                    chamfer_mm = st.number_input("Xamfrà a les cantonades (mm)", 0.0, 10.0, 1.0, 0.5,
-                                                 help="Talla les cantonades que punxen del contorn "
-                                                      "de plaques, suports i costelles. Els forats, "
-                                                      "ranures i osques no es toquen. 0 = sense.")
+                    chamfer_mm = st.slider("Xamfrà de les plaques (mm)", 0.0, 10.0, 1.0, 0.5,
+                                           help="Talla les cantonades que punxen de les plaques, "
+                                                "per a l'efecte (sobretot amb llum a dins). Amb "
+                                                "espai entre cares, també la punta dels suports "
+                                                "que es veu per l'escletxa. 0 = sense.")
+                    tenon_chamfer = st.slider("Xamfrà dels tenons (mm)", 0.0, 1.5, 0.5, 0.1,
+                                              help="A les puntes dels tenons de suports i "
+                                                   "costelles, perquè entrin més fàcilment a les "
+                                                   "ranures (0,5–1 mm).")
                     fast_ribs = st.checkbox("Cerca de costelles ràpida", False,
                                             help="Amb formes arrodonides (moltes plaques petites) la "
                                                  "cerca completa pot trigar molts minuts. La ràpida "
@@ -265,7 +270,8 @@ if models:
                         st.session_state["cares"] = cares.make_faces(
                             mesh, target, size, thickness, gap, bracket, laser.SHEETS[sheet], joint,
                             decor=decor, texture=texture, fast_ribs=fast_ribs,
-                            bracket_spacing=spacing, chamfer_mm=chamfer_mm)
+                            bracket_spacing=spacing, chamfer_mm=chamfer_mm,
+                            tenon_chamfer=tenon_chamfer)
                 r, prefix = st.session_state.get("cares"), "cares"
                 if r:
                     s = r.stats
