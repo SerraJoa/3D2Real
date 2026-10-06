@@ -109,3 +109,12 @@ def test_cerca_de_costelles_rapida_opcional():
     assert inspect.signature(cares.make_faces).parameters["fast_ribs"].default is False
     r = cares.make_faces(trimesh.creation.icosphere(1, 30), 200, 80, 3.0, fast_ribs=True)
     assert overlaps(visor.cares_solids(r)) == []
+
+
+def test_mes_suports_petits_o_menys_de_grans():
+    """La distància entre suports d'una aresta tria entre pocs suports grans o molts de petits."""
+    m = trimesh.creation.box((200, 60, 40))
+    pocs = cares.make_faces(m, 50, 200, 3.0)
+    molts = cares.make_faces(m, 50, 200, 3.0, bracket_mm=12, bracket_spacing=30)
+    assert molts.stats["suports"] > pocs.stats["suports"]
+    assert overlaps(visor.cares_solids(molts)) == []
