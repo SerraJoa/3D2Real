@@ -93,8 +93,11 @@ streamlit run app.py
   sol cop (donen pràcticament la mateixa costella).
 - **Xamfrà de les plaques** (1 mm per defecte a l'app): talla les cantonades que punxen del
   contorn de les plaques, per a l'efecte (sobretot amb llum a dins). Els forats i les ranures
-  no es toquen. Amb espai entre cares, la punta del suport omple l'escletxa i es veu: també
-  hi va el xamfrà, fins als cantells de les plaques.
+  no es toquen.
+- **Punta del suport a l'escletxa**: amb espai entre cares, la punta de cada suport omple
+  l'escletxa entre les dues plaques fins a la cara de fora (enrasada), i la cantonada de
+  fora s'arrodoneix amb el radi del xamfrà de les plaques. En un racó còncau l'arrodoniment
+  sortiria del model i la cantonada queda viva.
 - **Xamfrà dels tenons** (0,5 mm per defecte; 0,5–1 mm): a les puntes dels tenons de suports
   i costelles, perquè entrin més fàcilment a les ranures.
 - Els suports entren cap a dins la meitat que abans: l'arc té un gruix de max(1,25 × gruix,

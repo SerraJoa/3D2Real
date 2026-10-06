@@ -149,8 +149,16 @@ def test_xamfra_de_plaques_i_de_tenons():
         else:
             assert p.shape.area == pytest.approx(sense[p.name].area)
     assert overlaps(visor.cares_solids(tenons)) == []
-    # Amb espai entre cares, la punta del suport (que es veu) també porta xamfrà.
-    a = {p.name: p.shape for p in cares.make_faces(m, 200, 80, 3.0, gap=4.0).parts}
-    b = cares.make_faces(m, 200, 80, 3.0, gap=4.0, chamfer_mm=2.0)
-    assert all(p.shape.area < a[p.name].area for p in b.parts if p.name.startswith("S"))
-    assert overlaps(visor.cares_solids(b)) == []
+    # Amb espai entre cares, la punta del suport omple l'escletxa fins a la cara de fora (es
+    # veu), arrodonida amb el radi del xamfrà de les plaques, i no surt del model.
+    viu = cares.make_faces(m, 200, 80, 3.0, gap=4.0)
+    rodo = cares.make_faces(m, 200, 80, 3.0, gap=4.0, chamfer_mm=2.0)
+    a = {p.name: p.shape for p in viu.parts}
+    assert all(p.shape.area < a[p.name].area for p in rodo.parts if p.name.startswith("S"))
+    lo, hi = rodo.extra["mesh"].bounds
+    for s in visor.cares_solids(rodo):
+        assert np.all(s.mesh.bounds[0] >= lo - 1e-6) and np.all(s.mesh.bounds[1] <= hi + 1e-6)
+        if s.kind == "Suports":  # arriba a la cara de fora en dues cares de la capsa
+            touch = np.isclose(s.mesh.bounds[0], lo, atol=1e-3) | np.isclose(s.mesh.bounds[1], hi, atol=1e-3)
+            assert touch.sum() >= 2
+    assert overlaps(visor.cares_solids(rodo)) == []
