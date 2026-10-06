@@ -82,23 +82,49 @@ ARCH_DEPTH = (1.25, 4.0)  # gruix de l'arc cap a dins: max(factor × gruix, mín
 KITE_DEPTH = 0.3          # fondària de l'estel, respecte del braç
 
 
-def _cut_corner(p: np.ndarray, a: np.ndarray, b: np.ndarray, d: float,
-                frac: float = 0.95) -> list[np.ndarray]:
-    """La cantonada `p` (entre els veïns `a` i `b`) amb un xamfrà de `d` mm, com a molt `frac`
-    de cada costat (a l'escletxa, els veïns són els cantells de les plaques: pot arribar-hi)."""
-    la, lb = np.linalg.norm(a - p), np.linalg.norm(b - p)
-    k = min(d, frac * la, frac * lb)
-    if k <= 1e-6:
-        return [p]
-    return [p + (a - p) / la * k, p + (b - p) / lb * k]
+def _gap_fill(seam: Seam, t: float, s: float, radius: float) -> list[np.ndarray] | None:
+    """Punta del suport que omple l'escletxa entre plaques separades fins a la cara de fora.
+
+    Va del cantell de la placa p (a la cara interior, A(s)) a la cara de fora, ressegueix la
+    superfície del model fins a l'aresta, on la cantonada s'arrodoneix amb `radius` (si és
+    convexa: en un racó còncau l'arrodoniment sortiria del model i queda viva), i torna pel
+    cantell de la placa q fins a B(s). Coordenades de la secció; None si no hi ha escletxa.
+    """
+    b2, nb2 = _section(seam, t)
+    P0 = _inner_corner(b2, nb2, t)
+    if P0 is None:
+        return None
+    uB0 = float((P0 - nb2 * t) @ b2)
+    if not (s > P0[0] + 1e-3 and s > uB0 + 1e-3):
+        return None
+    A_in, A_out = np.array([s, t]), np.array([s, 0.0])
+    B_in, B_out = b2 * s + nb2 * t, b2 * s
+    corner = [np.zeros(2)]  # l'aresta del model: les dues cares de fora s'hi troben
+    dA, dB = np.array([1.0, 0.0]), b2 / np.linalg.norm(b2)
+    cr = lambda u, v: u[0] * v[1] - u[1] * v[0]
+    convex = np.sign(cr(dA, P0)) == np.sign(cr(dA, dB)) == np.sign(cr(P0, dB))
+    theta = math.acos(float(np.clip(dA @ dB, -1, 1)))
+    if radius > 0 and convex and 1e-3 < theta < math.pi - 1e-3:
+        d = min(radius / math.tan(theta / 2), 0.95 * s)
+        r = d * math.tan(theta / 2)
+        bis = (dA + dB) / np.linalg.norm(dA + dB)
+        c = bis * r / math.sin(theta / 2)
+        TA, TB = dA * d, dB * d
+        a0 = math.atan2(*(TA - c)[::-1])
+        a1 = math.atan2(*(TB - c)[::-1])
+        da = (a1 - a0 + math.pi) % (2 * math.pi) - math.pi  # pel camí curt
+        corner = [c + r * np.array([math.cos(a0 + da * f), math.sin(a0 + da * f)])
+                  for f in np.linspace(0, 1, 9)]
+    return [A_in, A_out, *corner, B_out, B_in]
 
 
-def bracket_shape(seam: Seam, t: float, s: float, leg: float, corner: float = 0.0) -> Polygon | None:
+def bracket_shape(seam: Seam, t: float, s: float, leg: float,
+                  corner: float | None = None) -> Polygon | None:
     """Suport en forma d'estel al pla perpendicular a l'aresta (coordenades de la secció).
 
     Recolza en la cara interior de les dues plaques des del seu cantell (a `s`) fins a
-    `s + leg`, i s'obre cap a l'interior del model. Si les plaques estan separades, la punta
-    del suport omple l'escletxa i es veu: hi va un xamfrà de `corner` mm.
+    `s + leg`, i s'obre cap a l'interior del model. Amb `corner` (radi, mm) i les plaques
+    separades, la punta omple l'escletxa fins a la cara de fora, arrodonida (vegeu `_gap_fill`).
     """
     b2, nb2 = _section(seam, t)
     if abs(b2[1]) < 1e-6:
@@ -117,16 +143,14 @@ def bracket_shape(seam: Seam, t: float, s: float, leg: float, corner: float = 0.
     if m @ inward < 0:
         m = -m
     C = P0 + m * leg * KITE_DEPTH
-    tip = [P0]
-    uB0 = float((P0 - nb2 * t) @ b2)
-    if corner > 0 and s > P0[0] + 1e-3 and s > uB0 + 1e-3:  # punta a l'escletxa
-        tip = _cut_corner(P0, B_end, A_end, corner)
-    poly = Polygon(tip + [A_end, C, B_end])
+    fill = _gap_fill(seam, t, s, corner) if corner is not None else None
+    tip = [P0] if fill is None else fill  # amb escletxa, la punta l'omple fins a fora
+    poly = Polygon(tip + [B_end, C, A_end])
     if not poly.is_valid or poly.area < 1e-3:
         return None
     A, B = _slabs(seam, t, s)
     if poly.intersection(A).area > 1e-6 or poly.intersection(B).area > 1e-6:
-        return None
+        return None if fill is None else bracket_shape(seam, t, s, leg)
     return poly
 
 
@@ -173,7 +197,7 @@ def _arc_around(c: np.ndarray, p0: np.ndarray, p1: np.ndarray, through: np.ndarr
 
 def arch_bracket(seam: Seam, t: float, s: float, length: float,
                  tenons_p: list, tenons_q: list, tip: float = 0.0,
-                 corner: float = 0.0) -> Polygon | None:
+                 corner: float | None = None) -> Polygon | None:
     """Suport en arc amb tenons, al pla perpendicular a l'aresta (coordenades de la secció).
 
     La vora de fora ressegueix la cara interior de les dues plaques des del seu cantell
@@ -181,8 +205,9 @@ def arch_bracket(seam: Seam, t: float, s: float, length: float,
     de dins és un arc tangent a les dues bandes; als racons còncaus, un arc de cercle per
     darrere la cantonada (o un colze recte si l'arc no hi cap).
 
-    `tip`: xamfrà a les puntes dels tenons (entren més fàcilment a les ranures). `corner`:
-    xamfrà a la cantonada del suport quan omple l'escletxa entre plaques separades (es veu).
+    `tip`: xamfrà a les puntes dels tenons (entren més fàcilment a les ranures). Amb `corner`
+    (radi, mm) i les plaques separades, la punta del suport omple l'escletxa fins a la cara de
+    fora, arrodonida (vegeu `_gap_fill`).
     """
     b2, nb2 = _section(seam, t)
     P0 = _inner_corner(b2, nb2, t)
@@ -210,15 +235,15 @@ def arch_bracket(seam: Seam, t: float, s: float, length: float,
     # cares), es va directe a la cantonada; si no, es ressegueix el cantell fins allà.
     uA0 = P0[0]
     uB0 = float((P0 - nb2 * t) @ b2)
-    gap_a, gap_b = s > uA0 + 1e-3, s > uB0 + 1e-3
-    if gap_a:
-        chain.append(A(s))
-    if corner > 0 and gap_a and gap_b:  # la punta omple l'escletxa entre plaques: es veu
-        chain += _cut_corner(P0, A(s), B(s), corner)
+    fill = _gap_fill(seam, t, s, corner) if corner is not None else None
+    if fill is not None:  # la punta omple l'escletxa entre plaques fins a fora: es veu
+        chain += fill
     else:
+        if s > uA0 + 1e-3:
+            chain.append(A(s))
         chain.append(P0)
-    if gap_b:
-        chain.append(B(s))
+        if s > uB0 + 1e-3:
+            chain.append(B(s))
     for u0, u1 in sorted(tenons_q):
         chain += peg(B, out_b, u0, u1)
     B_in = B(s + length) + nb2 * w
@@ -241,6 +266,8 @@ def arch_bracket(seam: Seam, t: float, s: float, length: float,
     pegs += [Polygon([B(u0), B(u1), B(u1) + out_b * t, B(u0) + out_b * t]) for u0, u1 in tenons_q]
     body = poly.difference(unary_union(pegs).buffer(1e-6)) if pegs else poly
     if body.intersection(slab_a).area > 1e-4 or body.intersection(slab_b).area > 1e-4:
+        if fill is not None:  # la punta no hi cap: com abans, sense omplir l'escletxa
+            return arch_bracket(seam, t, s, length, tenons_p, tenons_q, tip)
         return None
     return poly
 
@@ -804,10 +831,10 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
 
     def envelope(seam: Seam, s: float, leg: float):
         """Tot el que pot ocupar el suport a la seva secció: l'arc amb tots els tenons i l'estel."""
-        shapes = [bracket_shape(seam, thickness, s, leg)]
+        shapes = [bracket_shape(seam, thickness, s, leg, corner=0.0)]
         if joint == "encaix":
             spans = tenon_spans(s, leg, thickness)
-            shapes.append(arch_bracket(seam, thickness, s, leg, spans, spans))
+            shapes.append(arch_bracket(seam, thickness, s, leg, spans, spans, corner=0.0))
         shapes = [g for g in shapes if g is not None]
         return unary_union(shapes) if shapes else None
 

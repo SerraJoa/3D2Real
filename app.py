@@ -251,8 +251,9 @@ if models:
                     chamfer_mm = st.slider("Xamfrà de les plaques (mm)", 0.0, 10.0, 1.0, 0.5,
                                            help="Talla les cantonades que punxen de les plaques, "
                                                 "per a l'efecte (sobretot amb llum a dins). Amb "
-                                                "espai entre cares, també la punta dels suports "
-                                                "que es veu per l'escletxa. 0 = sense.")
+                                                "espai entre cares, la punta de cada suport omple "
+                                                "l'escletxa fins a fora i aquest és el radi de la "
+                                                "seva cantonada. 0 = sense.")
                     tenon_chamfer = st.slider("Xamfrà dels tenons (mm)", 0.0, 1.5, 0.5, 0.1,
                                               help="A les puntes dels tenons de suports i "
                                                    "costelles, perquè entrin més fàcilment a les "
