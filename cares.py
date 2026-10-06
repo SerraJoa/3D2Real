@@ -587,7 +587,7 @@ JOINTS = ("encaix", "cola")
 def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickness: float = 3.0,
                gap: float = 0.0, bracket_mm: float = 25.0, sheet=(600.0, 400.0),
                joint: str = "encaix", decor: dict | None = None, texture=None,
-               fast_ribs: bool = False) -> LaserResult:
+               fast_ribs: bool = False, bracket_spacing: float = BRACKET_SPACING) -> LaserResult:
     """Plaques i suports per a làser.
 
     `joint`: "encaix" = suports en arc amb tenons que entren en ranures de les plaques (com
@@ -597,7 +597,8 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
     `decor` ({índex de placa: decor.DecorSpec}) grava o talla textures, imatges, patrons o
     dibuixos a les cares; `texture` és la decor.Texture de la malla original.
 
-    `fast_ribs` limita la cerca de costelles (menys plans, com a molt RIB_SECONDS): molt més
+    `bracket_spacing`: mm d'aresta per suport (menys i més grans, o més i més petits, combinat
+    amb `bracket_mm`). `fast_ribs` limita la cerca de costelles (menys plans, com a molt RIB_SECONDS): molt més
     ràpid amb molts grups de plaques solts, però en pot deixar més sense unir.
     """
     if texture is not None:
@@ -751,6 +752,21 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
         with np.errstate(divide="ignore", invalid="ignore"):
             return inter.volume > 0.05
 
+    grown: dict[int, tuple] = {}
+
+    def fits(k: int, rect: Polygon, taken: list) -> bool:
+        """La petjada cap dins la placa (eixamplada 0,3 mm, calculada un sol cop per forma) i
+        queda a més de 0,5 mm de les altres petjades i ranures de la placa (totes alhora)."""
+        if k in plates:
+            shape = plates[k].shape
+            if k not in grown or grown[k][0] is not shape:
+                g = shape.buffer(0.3)
+                shapely.prepare(g)
+                grown[k] = (shape, g)
+            if not grown[k][1].contains(rect):
+                return False
+        return not taken or not shapely.dwithin(rect, np.array(taken, dtype=object), 0.5).any()
+
     def plan(footprints: dict[int, list], parent: list[int], planes) -> list:
         """Tria on va cada suport: llargada del braç i posicions al llarg de l'aresta.
 
@@ -778,7 +794,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
         for seam in tree + rest:
             L = float(np.linalg.norm(seam.e1 - seam.e0))
             s = seam.inset + gap / 2
-            count = max(1, int(round(L / BRACKET_SPACING)))
+            count = max(1, int(round(L / bracket_spacing)))
             d3 = (seam.e1 - seam.e0) / L
             leg, centers = None, []
             # El braç va cap a dins de la placa: la mida la limita la placa, no l'aresta.
@@ -792,11 +808,8 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                 for shift in (0.0, -0.2, 0.2, -0.35, 0.35):
                     fr = [float(np.clip((i + 0.5 + shift) / count, 0.12, 0.88)) for i in range(count)]
                     cs = [seam.e0 + d3 * L * x for x in fr]
-                    rects = {k: [footprint(k, seam, c, s, cand) for c in cs] for k in (seam.p, seam.q)}
-                    inside = all(k not in plates or plates[k].shape.buffer(0.3).contains(r)
-                                 for k, rs in rects.items() for r in rs)
-                    if not inside or any(r.buffer(0.5).intersects(o) for k, rs in rects.items()
-                                         for r in rs for o in footprints[k]):
+                    if not all(fits(k, footprint(k, seam, c, s, cand), footprints[k])
+                               for k in (seam.p, seam.q) for c in cs):
                         continue
                     # Els suports deixen pas a les costelles (mitja fusta); si no es pot, l'esquiven.
                     if rough is not None and any(laps(c, seam, rough, planes) is None for c in cs):

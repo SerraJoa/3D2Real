@@ -244,6 +244,10 @@ if models:
                                           "plaques (els tenons es veuen per fora). Cola: estel "
                                           "enganxat per dins, del tot invisible.")
                     bracket = st.slider("Llargada dels braços dels suports (mm)", 8, 60, 25)
+                    spacing = st.slider("Distància entre suports d'una mateixa aresta (mm)", 20, 200, 80,
+                                        help="Amb els braços: pocs suports grans (distància i "
+                                             "braços llargs) o molts de petits (curts i a prop), "
+                                             "que caben millor a les plaques estretes.")
                     fast_ribs = st.checkbox("Cerca de costelles ràpida", False,
                                             help="Amb formes arrodonides (moltes plaques petites) la "
                                                  "cerca completa pot trigar molts minuts. La ràpida "
@@ -256,7 +260,8 @@ if models:
                     with st.spinner("Tallant cares i suports…"):
                         st.session_state["cares"] = cares.make_faces(
                             mesh, target, size, thickness, gap, bracket, laser.SHEETS[sheet], joint,
-                            decor=decor, texture=texture, fast_ribs=fast_ribs)
+                            decor=decor, texture=texture, fast_ribs=fast_ribs,
+                            bracket_spacing=spacing)
                 r, prefix = st.session_state.get("cares"), "cares"
                 if r:
                     s = r.stats

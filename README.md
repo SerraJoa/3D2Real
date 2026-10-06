@@ -75,6 +75,9 @@ streamlit run app.py
   la placa al llarg de tot el gruix. Es tria el pla que
   uneix més grups (i, a igualtat, la costella més petita). Si les costelles no milloren el
   resultat, no se'n posen.
+- **Distància entre suports** d'una mateixa aresta (80 mm per defecte): amb la llargada dels
+  braços, tria entre pocs suports grans o molts de petits, que caben millor a les plaques
+  estretes.
 - **Cerca de costelles ràpida** (opcional): amb formes arrodonides hi ha moltes plaques
   petites i molts grups solts, i la cerca completa pot trigar molts minuts. La ràpida prova
   menys plans i s'atura als 10 s, però pot deixar més grups sense unir.
