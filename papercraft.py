@@ -1129,11 +1129,12 @@ def _free_spot(occ: np.ndarray, focc, mask: np.ndarray, fmask) -> tuple[int, int
     if h > H or w > W:
         return None
     corr = np.fft.irfft2(focc * fmask, s=_fft_shape(occ.shape))[:H - h + 1, :W - w + 1]
-    free = np.argwhere(corr < 0.5)
-    if not len(free):
+    free = corr < 0.5
+    rows = free.any(axis=1)
+    if not rows.any():
         return None
-    i, j = free[0]  # argwhere ja va per files i després columnes
-    return int(i), int(j)
+    i = int(rows.argmax())  # primera fila amb lloc i, dins seu, primera columna
+    return i, int(free[i].argmax())
 
 
 def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGIN,
@@ -1180,26 +1181,37 @@ def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGI
                 geom = affinity.rotate(base, ang, origin=(0, 0), use_radians=True)
                 mask, origin = _raster(geom, res)
                 if mask.shape[0] <= Hn and mask.shape[1] <= Wn:
-                    options.append((ang, mask, origin, _mask_fft((Hn, Wn), mask)))
+                    options.append([ang, mask, origin, None])  # FFT quan calgui
+            options.sort(key=lambda o: o[1].shape[0])  # les més baixes primer: poden descartar la resta
             cache[shape_key] = options
 
         placed = False
         for sheet in sheets + [None]:
             if sheet is None:  # pàgina nova
                 occ = np.zeros((Hn, Wn), dtype=bool)
-                sheet = [None, occ, _occ_fft(occ)]
-            page_obj, occ, focc = sheet
+                sheet = [None, occ, _occ_fft(occ), set()]
+            page_obj, occ, focc, full_for = sheet
+            # Una pàgina només s'omple: si una forma igual ja no hi ha cabut, tampoc hi cabrà
+            # (amb moltes peces repetides, com els suports, això evita la majoria de proves).
+            if shape_key in full_for:
+                continue
             free = occ.size - int(occ.sum())
             best = None
-            for ang, mask, origin, fmask in options:
+            for opt in options:
+                ang, mask, origin, fmask = opt
                 if mask.sum() > free:
                     continue
+                if best is not None and mask.shape[0] > best[0][0]:
+                    continue  # ni a la fila 0 no deixaria la vora de baix tan amunt: no pot guanyar
+                if fmask is None:
+                    fmask = opt[3] = _mask_fft((Hn, Wn), mask)
                 spot = _free_spot(occ, focc, mask, fmask)
                 if spot is not None:
                     key = (spot[0] + mask.shape[0], -int(mask.sum()), spot[1])
                     if best is None or key < best[0]:
                         best = (key, spot, ang, mask, origin)
             if best is None:
+                full_for.add(shape_key)
                 continue
             _, (i, j), ang, mask, (ox, oy) = best
             c, s_ = math.cos(ang), math.sin(ang)
@@ -1230,7 +1242,7 @@ def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGI
             p.transform(lambda x, lo=lo: x - lo + margin)
             if fits:
                 full = np.ones((Hn, Wn), dtype=bool)
-                sheets.append([Page([p]), full, _occ_fft(full)])
+                sheets.append([Page([p]), full, _occ_fft(full), set()])
             else:
                 big.append(Page([p]))
     return [sh[0] for sh in sheets] + big, len(big)

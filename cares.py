@@ -212,6 +212,7 @@ def arch_bracket(seam: Seam, t: float, s: float, length: float,
 
 RIB_MAX = 12          # costelles màximes
 RIB_MIN_SIN = 0.3     # una placa gairebé paral·lela al pla de la costella no hi encaixa
+RIB_SAME_DIR = math.cos(math.radians(2.0))  # direccions de costella que es consideren iguals
 RIB_AXES = 6          # eixos de grups solts que es proven (a més de x, y, z), els més grans
 RIB_HEIGHTS = 20      # alçades que es proven per a cada direcció
 RIB_SECONDS = 10.0    # temps màxim de la cerca de costelles: amb molts grups solts, s'atura
@@ -425,6 +426,13 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, so
     # Ràpid (opcional): menys plans i un temps màxim. Amb molts grups solts la cerca
     # completa creix amb el quadrat dels grups, però pot unir-ne més.
     deadline = time.monotonic() + RIB_SECONDS if fast else math.inf
+    plate_pts = {k: m.vertices[np.unique(m.faces[plate_of == k])] for k in plates}
+    # Una placa només pot rebre el tenó d'una costella si hi cap la ranura (d'amplada ≥ t, a
+    # 0,5 mm de la vora): encongida t/2 + 0,5 mm encara n'ha de quedar alguna cosa.
+    roomy = {k for k, p in plates.items() if not p.shape.buffer(-(t / 2 + 0.5)).is_empty}
+    # Les costelles candidates es guarden d'una ronda a l'altra: en afegir una costella només
+    # canvien les plaques on entra (ranures noves), i només cal refer les que hi tenien tenó.
+    tried: dict[tuple, tuple | None] = {}
     ribs: list[Part] = []
     n_slots = 0
     planes, cuts, links = [], {}, []
@@ -444,32 +452,65 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, so
             fs = np.isin(plate_of, ks)
             ns = m.face_normals[fs]
             axis = np.linalg.svd(ns, full_matrices=False)[2][-1]
-            normals_c.append(axis / np.linalg.norm(axis))
+            axis = axis / np.linalg.norm(axis)
+            # Direccions gairebé iguals (a menys de 2°) donen els mateixos plans: només una.
+            if all(abs(float(axis @ n_)) < RIB_SAME_DIR for n_ in normals_c):
+                normals_c.append(axis)
             offsets.append(m.vertices[np.unique(m.faces[fs])])
-        found = []
+        # Quins grups pot unir cada pla, com a molt: els de les plaques que talla (es veu
+        # només amb l'alçada dels vèrtexs). Es construeixen les costelles dels plans que en
+        # poden unir més primer, i es descarten els que ja no poden igualar la millor.
+        ks_all = sorted(roomy)
+        gid = np.array([find(k) for k in ks_all])
+        tries = []
         for N in normals_c:
             heights = set()
             for pts in offsets:
                 h = pts @ N
                 heights |= {round(float(x), 3) for x in np.linspace(h.min(), h.max(), 16)[1:-1]}
-            heights = sorted(heights)
+            # Alçades a menys de mig gruix l'una de l'altra donen pràcticament la mateixa
+            # costella: només la primera (amb molts grups petits, n'hi ha milers d'arrambades).
+            kept = []
+            for h_ in sorted(heights):
+                if not kept or h_ - kept[-1] >= t / 2:
+                    kept.append(h_)
+            heights = kept
             if fast and len(heights) > RIB_HEIGHTS:  # molts grups: una mostra repartida
                 heights = [heights[i] for i in np.linspace(0, len(heights) - 1, RIB_HEIGHTS).astype(int)]
+            proj = [plate_pts[k] @ N for k in ks_all]
+            lo = np.array([p.min() for p in proj])
+            hi = np.array([p.max() for p in proj])
+            # Una placa gairebé paral·lela al pla no pot rebre tenó.
+            slanted = np.array([np.linalg.norm(np.cross(normals[k], N)) >= RIB_MIN_SIN for k in ks_all],
+                               dtype=bool)
             for hgt in heights:
-                if time.monotonic() > deadline:
-                    break
-                origin = N * hgt
-                cand = rib_candidate(m, plate_of, plates, normals, to2d, origin, N, t)
-                if cand is None:
-                    continue
-                comps, slots = cand
-                merged = sum(len({find(k) for k in ks}) - 1 for _, ks in comps)
-                area = sum(g.area for g, _ in comps)
-                if merged > 0:
-                    found.append(((merged, -area), N, origin))
+                crossed = gid[(lo < hgt) & (hi > hgt) & slanted]
+                bound = len(set(crossed.tolist())) - 1
+                if bound > 0:
+                    tries.append((bound, len(tries), N, hgt))
+        found = []
+        top = 0
+        for bound, idx, N, hgt in sorted(tries, key=lambda x: (-x[0], x[1])):
+            if bound < top or time.monotonic() > deadline:
+                break
+            origin = N * hgt
+            key_ = (*np.round(N, 9).tolist(), hgt)
+            if key_ not in tried:
+                tried[key_] = rib_candidate(m, plate_of, plates, normals, to2d, origin, N, t)
+            cand = tried[key_]
+            if cand is None:
+                continue
+            comps, slots = cand
+            merged = sum(len({find(k) for k in ks}) - 1 for _, ks in comps)
+            area = sum(g.area for g, _ in comps)
+            if merged > 0:
+                top = max(top, merged)
+                found.append(((merged, -area), idx, N, origin))
+        found = [(key, N, origin) for key, idx, N, origin in
+                 sorted(found, key=lambda x: (-x[0][0], -x[0][1], x[1]))]
         # Els millors plans, ara retallats amb la secció exacta de les plaques que travessen.
         best, best_key = None, None
-        for key, N, origin in sorted(found, key=lambda x: x[0], reverse=True)[:6]:
+        for key, N, origin in found[:6]:
             if best_key is not None and key[0] < best_key[0]:
                 break
             cand = rib_candidate(m, plate_of, plates, normals, to2d, origin, N, t, solid_of)
@@ -483,6 +524,8 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, so
         if best is None:
             break
         N, origin, comps, slots = best
+        changed = {k for _, ks in comps for k in ks}
+        tried = {key_: c for key_, c in tried.items() if c is None or not (set(c[1]) & changed)}
         u, v = _plane_basis(N)
         plane_parts: list[Part] = []
         planes.append((origin, N, u, v, plane_parts))
@@ -767,7 +810,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                 return False
         return not taken or not shapely.dwithin(rect, np.array(taken, dtype=object), 0.5).any()
 
-    def plan(footprints: dict[int, list], parent: list[int], planes) -> list:
+    def plan(footprints: dict[int, list], parent: list[int], planes, upgrade: bool = True) -> list:
         """Tria on va cada suport: llargada del braç i posicions al llarg de l'aresta.
 
         Cada suport es mou al llarg de l'aresta o s'escurça fins que cap dins les dues
@@ -791,49 +834,90 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
         parent[:] = tmp  # ara només compten les unions que de debò porten suport (o costella)
         plans = []
         bodies = []  # suports ja posats, en 3D
-        for seam in tree + rest:
+        legs = [bracket_mm * f for f in (1.0, 0.75, 0.55, 0.4, 0.3)] + [2 * thickness,
+                                                                        1.5 * thickness]
+        # El braç va cap a dins de la placa: la mida la limita la placa, no l'aresta.
+        legs = sorted({round(x, 3) for x in legs if x >= 1.5 * thickness}, reverse=True)
+
+        def place(seam: Seam, s: float, options):
+            """Primera opció (braç, nombre de suports) que hi cap: (braç, centres, cossos 3D)."""
             L = float(np.linalg.norm(seam.e1 - seam.e0))
-            s = seam.inset + gap / 2
-            count = max(1, int(round(L / bracket_spacing)))
+            if L < thickness + 1.0:
+                return None
             d3 = (seam.e1 - seam.e0) / L
-            leg, centers = None, []
-            # El braç va cap a dins de la placa: la mida la limita la placa, no l'aresta.
-            legs = [bracket_mm * f for f in (1.0, 0.75, 0.55, 0.4, 0.3)] + [2 * thickness,
-                                                                            1.5 * thickness]
-            for cand in sorted({round(x, 3) for x in legs if x >= 1.5 * thickness}, reverse=True):
-                if L < thickness + 1.0:
-                    break
+            others = None  # plaques en 3D: només si algun suport cap a les plaques (és car)
+            envs: dict[float, Polygon | None] = {}
+            for cand, n in options:
                 rough = bracket_shape(seam, thickness, s, cand) if planes else None
-                env = others = None  # només si el suport cap a les plaques (és car)
                 for shift in (0.0, -0.2, 0.2, -0.35, 0.35):
-                    fr = [float(np.clip((i + 0.5 + shift) / count, 0.12, 0.88)) for i in range(count)]
+                    fr = [float(np.clip((i + 0.5 + shift) / n, 0.12, 0.88)) for i in range(n)]
                     cs = [seam.e0 + d3 * L * x for x in fr]
                     if not all(fits(k, footprint(k, seam, c, s, cand), footprints[k])
                                for k in (seam.p, seam.q) for c in cs):
                         continue
+                    if n > 1:  # els suports de la mateixa aresta tampoc es poden tocar entre ells
+                        own = [footprint(seam.p, seam, c, s, cand) for c in cs]
+                        if any(own[i].distance(own[j]) < 0.5 for i in range(n) for j in range(i)):
+                            continue
                     # Els suports deixen pas a les costelles (mitja fusta); si no es pot, l'esquiven.
                     if rough is not None and any(laps(c, seam, rough, planes) is None for c in cs):
                         continue
                     # Dins del model, l'arc no pot tocar cap altre suport ni cap altra placa
                     # (als vèrtexs on es troben moltes plaques, com la punta d'un con).
                     if others is None:
-                        env = envelope(seam, s, cand)
                         others = [plate_solid(k) for k in plates if k not in (seam.p, seam.q)]
+                    if cand not in envs:
+                        envs[cand] = envelope(seam, s, cand)
+                    env = envs[cand]
                     news = [body(seam, c, env) for c in cs] if env is not None else []
                     if any(clash(nb, o) for nb in news for o in near(nb, bodies + others)):
                         continue
-                    leg, centers = cand, cs
-                    break
-                if leg is not None:
-                    break
-            if leg is None:
+                    return cand, cs, news
+            return None
+
+        def more(seam: Seam, count: int, above: float):
+            """Opcions amb més suports i més petits que donen més braç total que `above`:
+            primer les de més braç total (fins al del suport triat) i, a igualtat, menys suports."""
+            L = float(np.linalg.norm(seam.e1 - seam.e0))
+            most = min(3 * count, int(L // (thickness + 4.0)))
+            opts = [(c, n) for c in legs for n in range(count + 1, most + 1)
+                    if min(c * n, bracket_mm * count) > above + 1e-6]
+            return sorted(opts, key=lambda o: (-min(o[0] * o[1], bracket_mm * count), o[1], -o[0]))
+
+        def put(seam: Seam, s: float, got) -> tuple:
+            leg, centers, news = got
+            fps = {k: [footprint(k, seam, c, s, leg) for c in centers] for k in (seam.p, seam.q)}
+            for k, fs in fps.items():
+                footprints[k] += fs
+            bodies.extend(news)
+            return fps, news
+
+        # 1) Un suport (o els que toquin per la distància triada) a cada aresta, el més gran que
+        #    hi càpiga; si no n'hi cap cap, més suports i més petits.
+        placed = []
+        for seam in tree + rest:
+            L = float(np.linalg.norm(seam.e1 - seam.e0))
+            s = seam.inset + gap / 2
+            count = max(1, int(round(L / bracket_spacing)))
+            got = place(seam, s, [(c, count) for c in legs]) or place(seam, s, more(seam, count, 0.0))
+            if got is None:
                 continue
-            for k in (seam.p, seam.q):
-                footprints[k] += [footprint(k, seam, c, s, leg) for c in centers]
-            bodies += news
+            fps, news = put(seam, s, got)
             parent[find(seam.p)] = find(seam.q)
-            plans.append((seam, s, leg, centers))
-        return plans
+            placed.append([seam, s, count, got, fps, news])
+        # 2) Quan ja totes les arestes tenen el seu, les que s'han quedat amb suports petits
+        #    proven més suports de mitjans (sense treure lloc a cap altra aresta).
+        for item in placed if upgrade else []:
+            seam, s, count, got, fps, news = item
+            total = got[0] * len(got[1])
+            if total >= 0.75 * bracket_mm * count:
+                continue
+            for k, fs in fps.items():
+                footprints[k] = [f for f in footprints[k] if all(f is not g for g in fs)]
+            bodies[:] = [b for b in bodies if all(b is not g for g in news)]
+            better = place(seam, s, more(seam, count, total))
+            item[3:] = [better or got, *put(seam, s, better or got)]
+        return [(seam, s, got[0], got[1]) for seam, s, count, got, fps, news in placed]
 
     def groups_of(parent: list[int]) -> dict[int, int]:
         def find(x: int) -> int:
@@ -846,7 +930,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
         """Suports definitius (i costelles, si cal). Retorna tot el que fa falta per emetre."""
         # 1) Suports només per saber quins grups queden solts.
         trial = list(range(n_plates))
-        plan({k: [] for k in range(n_plates)}, trial, [])
+        plan({k: [] for k in range(n_plates)}, trial, [], upgrade=False)
         rib_data = ([], 0, [], {}, [])
         if ribs_on and len(set(groups_of(trial).values())) > 1:
             # 2) Costelles per a aquests grups, amb les plaques encara lliures de suports.
