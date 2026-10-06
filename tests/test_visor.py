@@ -118,3 +118,12 @@ def test_mes_suports_petits_o_menys_de_grans():
     molts = cares.make_faces(m, 50, 200, 3.0, bracket_mm=12, bracket_spacing=30)
     assert molts.stats["suports"] > pocs.stats["suports"]
     assert overlaps(visor.cares_solids(molts)) == []
+
+
+def test_suports_petits_quan_el_gran_no_hi_cap():
+    """Si el suport gran no hi cap, l'aresta en rep més de petits (sense treure lloc a les altres)."""
+    m = trimesh.creation.cylinder(20, 60, sections=10)
+    r = cares.make_faces(m, 300, 120, 3.0)
+    assert r.stats["arestes_sense_suport"] == 0
+    assert r.stats["suports"] > r.stats["arestes"]
+    assert overlaps(visor.cares_solids(r)) == []

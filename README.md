@@ -49,7 +49,10 @@ streamlit run app.py
 5. **Pàgines** (A4, A3, Carta): les peces es col·loquen segons la seva forma real, no per
    capses. La pàgina és una graella d'1 mm; cada peça, de la més gran a la més petita,
    prova uns 30 girs i es queda el lloc lliure que deixa la seva vora de baix més amunt
-   (la cerca es fa amb FFT). Entre peces hi ha 3 mm de separació.
+   (la cerca es fa amb FFT). Entre peces hi ha 3 mm de separació. Cada pàgina recorda les
+   formes que ja no hi caben (les peces repetides, com els suports, no les tornen a provar), i
+   un gir que ja no pot deixar la vora de baix més amunt que el millor trobat no es prova: el
+   temps creix en línia recta amb el nombre de peces.
 
 ## Branca 2: cares (làser)
 
@@ -78,6 +81,16 @@ streamlit run app.py
 - **Distància entre suports** d'una mateixa aresta (80 mm per defecte): amb la llargada dels
   braços, tria entre pocs suports grans o molts de petits, que caben millor a les plaques
   estretes.
+- **Més suports i més petits quan topen**: primer cada aresta rep el suport més gran que hi
+  cap; si no n'hi cap cap, se'n proven més i més petits. Després, quan totes les arestes ja
+  tenen el seu, les que s'han quedat amb suports petits proven de canviar-los per diversos de
+  mitjans (més braç total), sense treure lloc a cap altra aresta.
+- La cerca de costelles mira primer, només amb l'alçada dels vèrtexs, quants grups pot unir
+  cada pla com a molt (plaques que talla, prou grans per a una ranura i no paral·leles al pla)
+  i construeix primer les dels plans que en poden unir més; descarta els que ja no poden
+  igualar la millor, i les costelles candidates es reaprofiten d'una ronda a l'altra. Les
+  alçades a menys de mig gruix l'una de l'altra i les direccions a menys de 2° es proven un
+  sol cop (donen pràcticament la mateixa costella).
 - **Cerca de costelles ràpida** (opcional): amb formes arrodonides hi ha moltes plaques
   petites i molts grups solts, i la cerca completa pot trigar molts minuts. La ràpida prova
   menys plans i s'atura als 10 s, però pot deixar més grups sense unir.
