@@ -6,6 +6,7 @@ amb l'eix y cap amunt, vistes des de la cara que queda amunt a la màquina.
 from __future__ import annotations
 
 import io
+import math
 import zipfile
 from dataclasses import dataclass, field
 
@@ -62,6 +63,42 @@ class Part:
         self.guides += self.engraves
         self.guide_labels += self.labels
         self.engraves, self.labels = [], []
+
+
+def chamfer(shape, d: float, min_turn: float = 10.0):
+    """Xamfrà de `d` mm a les cantonades convexes del contorn exterior (no als forats ni a les
+    cantonades entrants, que han d'encaixar). Cada costat es retalla com a molt un 40 % per
+    banda, perquè dos xamfrans veïns no es trepitgin; els girs de menys de `min_turn` graus no
+    són cantonades."""
+    if d <= 0:
+        return shape
+    out = []
+    for g in getattr(shape, "geoms", [shape]):
+        if g.geom_type != "Polygon" or g.is_empty:
+            continue
+        ring = np.array(g.exterior.coords)[:-1]
+        if len(ring) < 3:
+            out.append(g)
+            continue
+        ccw = g.exterior.is_ccw
+        n = len(ring)
+        pts = []
+        for i in range(n):
+            p, a, b = ring[i], ring[i - 1], ring[(i + 1) % n]
+            u, v = a - p, b - p
+            lu, lv = np.linalg.norm(u), np.linalg.norm(v)
+            if lu < 1e-9 or lv < 1e-9:
+                continue
+            cross = (p - a)[0] * (b - p)[1] - (p - a)[1] * (b - p)[0]
+            turn = math.degrees(math.acos(np.clip((p - a) @ (b - p) / (lu * lv), -1, 1)))
+            if (cross > 0) != ccw or turn < min_turn:  # entrant o gairebé recte
+                pts.append(p)
+                continue
+            k = min(d, 0.4 * lu, 0.4 * lv)
+            pts += [p + u / lu * k, p + v / lv * k]
+        q = Polygon(pts, [r.coords for r in g.interiors]).buffer(0)
+        out.append(q if not q.is_empty else g)
+    return out[0] if len(out) == 1 else MultiPolygon(out)
 
 
 def pose(x, y, z, origin, z0: float, z1: float) -> tuple:

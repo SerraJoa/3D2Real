@@ -248,6 +248,10 @@ if models:
                                         help="Amb els braços: pocs suports grans (distància i "
                                              "braços llargs) o molts de petits (curts i a prop), "
                                              "que caben millor a les plaques estretes.")
+                    chamfer_mm = st.number_input("Xamfrà a les cantonades (mm)", 0.0, 10.0, 1.0, 0.5,
+                                                 help="Talla les cantonades que punxen del contorn "
+                                                      "de plaques, suports i costelles. Els forats, "
+                                                      "ranures i osques no es toquen. 0 = sense.")
                     fast_ribs = st.checkbox("Cerca de costelles ràpida", False,
                                             help="Amb formes arrodonides (moltes plaques petites) la "
                                                  "cerca completa pot trigar molts minuts. La ràpida "
@@ -261,7 +265,7 @@ if models:
                         st.session_state["cares"] = cares.make_faces(
                             mesh, target, size, thickness, gap, bracket, laser.SHEETS[sheet], joint,
                             decor=decor, texture=texture, fast_ribs=fast_ribs,
-                            bracket_spacing=spacing)
+                            bracket_spacing=spacing, chamfer_mm=chamfer_mm)
                 r, prefix = st.session_state.get("cares"), "cares"
                 if r:
                     s = r.stats

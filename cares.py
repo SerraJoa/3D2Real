@@ -21,7 +21,7 @@ from shapely.geometry import LineString, MultiPoint, Polygon
 from shapely.ops import unary_union
 
 import papercraft as pc
-from laser import LaserResult, Part, nest, placed, pose, solid
+from laser import LaserResult, Part, chamfer, nest, placed, pose, solid
 
 BRACKET_SPACING = 80.0  # mm d'aresta per suport (com a mínim un per aresta)
 BIG = 1000.0
@@ -630,7 +630,8 @@ JOINTS = ("encaix", "cola")
 def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickness: float = 3.0,
                gap: float = 0.0, bracket_mm: float = 25.0, sheet=(600.0, 400.0),
                joint: str = "encaix", decor: dict | None = None, texture=None,
-               fast_ribs: bool = False, bracket_spacing: float = BRACKET_SPACING) -> LaserResult:
+               fast_ribs: bool = False, bracket_spacing: float = BRACKET_SPACING,
+               chamfer_mm: float = 0.0) -> LaserResult:
     """Plaques i suports per a làser.
 
     `joint`: "encaix" = suports en arc amb tenons que entren en ranures de les plaques (com
@@ -639,6 +640,9 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
 
     `decor` ({índex de placa: decor.DecorSpec}) grava o talla textures, imatges, patrons o
     dibuixos a les cares; `texture` és la decor.Texture de la malla original.
+
+    `chamfer_mm`: xamfrà a les cantonades convexes del contorn de plaques, suports i costelles
+    (no als forats, ranures ni osques, que han d'encaixar).
 
     `bracket_spacing`: mm d'aresta per suport (menys i més grans, o més i més petits, combinat
     amb `bracket_mm`). `fast_ribs` limita la cerca de costelles (menys plans, com a molt RIB_SECONDS): molt més
@@ -926,26 +930,35 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
             return x
         return {k: find(k) for k in range(n_plates)}
 
+    first: dict = {}
+
     def final(ribs_on: bool):
         """Suports definitius (i costelles, si cal). Retorna tot el que fa falta per emetre."""
-        # 1) Suports només per saber quins grups queden solts.
-        trial = list(range(n_plates))
-        plan({k: [] for k in range(n_plates)}, trial, [], upgrade=False)
-        rib_data = ([], 0, [], {}, [])
-        if ribs_on and len(set(groups_of(trial).values())) > 1:
+        # 1) Suports sense costelles: diuen quins grups queden solts i, si no cal cap
+        #    costella (o les costelles no milloren res), ja són els definitius. Es calculen
+        #    un sol cop.
+        if not first:
+            trial = list(range(n_plates))
+            fps_t = {k: [] for k in range(n_plates)}
+            first.update(plans=plan(fps_t, trial, []), parent=trial, fps=fps_t)
+        trial = first["parent"]
+        before = len(set(groups_of(trial).values()))
+        if ribs_on and before > 1:
             # 2) Costelles per a aquests grups, amb les plaques encara lliures de suports.
             rib_data = add_ribs(m, plate_of, plates, normals, to2d, trial[:], thickness, plate_solid,
                                 fast_ribs)
-        ribs_, rib_slots_, planes_, cuts_, links_ = rib_data
-        # 3) Suports que esquiven les ranures i el gruix de les costelles.
-        parent_ = list(range(n_plates))
-        for ks in links_:
-            for k in ks[1:]:
-                g = groups_of(parent_)
-                parent_[g[ks[0]]] = g[k]
-        fps = {k: list(cuts_.get(k, [])) for k in range(n_plates)}
-        plans_ = plan(fps, parent_, planes_)
-        return plans_, groups_of(parent_), fps, rib_data, len(set(groups_of(trial).values()))
+            ribs_, rib_slots_, planes_, cuts_, links_ = rib_data
+            if ribs_:
+                # 3) Suports que esquiven les ranures i el gruix de les costelles.
+                parent_ = list(range(n_plates))
+                for ks in links_:
+                    for k in ks[1:]:
+                        g = groups_of(parent_)
+                        parent_[g[ks[0]]] = g[k]
+                fps = {k: list(cuts_.get(k, [])) for k in range(n_plates)}
+                plans_ = plan(fps, parent_, planes_)
+                return plans_, groups_of(parent_), fps, rib_data, before
+        return first["plans"], groups_of(trial), first["fps"], ([], 0, [], {}, []), before
 
     saved = {k: (p.shape, list(p.labels)) for k, p in plates.items()}
     plans, group, footprints, rib_data, before = final(True)
@@ -1036,6 +1049,8 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
             parts.append(part)
             brackets += 1
     parts += ribs
+    for part in parts:  # abans de decorar: el marc de la decoració segueix el xamfrà
+        part.shape = chamfer(part.shape, chamfer_mm)
 
     images, face_up, decor_holes = decorate_plates(m, plates, to2d, footprints, decor, texture)
 
