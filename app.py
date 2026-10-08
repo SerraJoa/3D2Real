@@ -7,6 +7,7 @@ import decor as dc
 import laminacio
 import laser
 import papercraft as pc
+import reduccio
 import vista
 import visor
 
@@ -36,6 +37,9 @@ def assembly_view(r, solids, key: str) -> None:
         cache[key] = (r, visor.pack(solids(r)))
     st.markdown("**Vista del muntatge**")
     visor.show([], key=f"visor_{key}", data=cache[key][1])
+
+
+MAX_FACES = 1000  # el lliscador de simplificació arriba fins aquí
 
 
 def ranges(ks: list[int]) -> str:
@@ -155,23 +159,77 @@ if models:
                                               not k.lower().endswith((".stl", ".obj", ".glb"))})
         st.success(f"{len(mesh.faces):,} cares · {len(mesh.vertices):,} vèrtexs"
                    + (" · amb textura" if texture is not None else ""))
+
+        # ---- Orientació: quin eix del fitxer va amunt i quant gira al voltant de la vertical
+        is_gltf = models[0].name.lower().endswith((".glb", ".gltf"))
+        with st.expander("🧭 Orientació del model", expanded=False):
+            o1, o2 = st.columns(2)
+            with o1:
+                up = st.selectbox("Eix del fitxer que va amunt", ["auto", *pc.UPS], 0,
+                                  help="Auto: +Y per als GLB/glTF (es desen amb la Y amunt) i +Z "
+                                       "per a la resta.")
+            with o2:
+                turn = st.select_slider("Gir al voltant de la vertical (°)", [0, 90, 180, 270], 0)
+            orient = (("+Y" if is_gltf else "+Z") if up == "auto" else up, turn)
+            mesh.apply_transform(pc.orientation_matrix(*orient))
+            st.download_button("⬇️ Descarrega el model reorientat (GLB)", mesh.export(file_type="glb"),
+                               models[0].name.rsplit(".", 1)[0] + "_reorientat.glb",
+                               "model/gltf-binary")
         c1, c2 = st.columns(2)
         with c1:
-            maxf = max(10, len(mesh.faces))
-            target = st.slider("Simplificació — nombre de cares", 10, maxf, max(10, min(maxf, 300)))
+            maxf = max(10, min(len(mesh.faces), MAX_FACES))
+            target = st.slider("Simplificació — nombre de cares", 10, maxf, max(10, min(maxf, 300)),
+                               help=f"Fins a {MAX_FACES} (més ja no es pot retallar ni muntar). "
+                                    "Es treuen primer les cares que continuen les veïnes sense "
+                                    "canviar d'inclinació, i al final les vores i els detalls.")
         with c2:
             size = st.number_input("Mida final — costat més llarg (mm)", 20.0, 2000.0, 120.0, 10.0)
+        r1, r2, r3 = st.columns([2, 1, 1])
+        with r1:
+            method = st.radio("Reducció", ["Respecta la forma", "Ràpida"], horizontal=True,
+                              help="Respecta la forma: dona més triangles als detalls (relleu, "
+                                   "vores i el dibuix de la textura: ulls, boca…) i tracta igual "
+                                   "les zones equivalents. Ràpida: només l'error geomètric global. "
+                                   "Totes dues treuen primer les cares que continuen les veïnes "
+                                   "sense canviar d'inclinació.")
+        with r2:
+            sym = st.selectbox("Simetria", ["no", "auto", "x", "y", "z"],
+                               disabled=method != "Respecta la forma",
+                               help="No (per defecte): no se n'imposa cap. Auto: si el model ja "
+                                    "és simètric, el resultat ho serà exactament. x, y o z: la "
+                                    "força amb el pla pel centre.")
+        with r3:
+            detail = st.slider("Pes dels detalls", 0, 60, 30, disabled=method != "Respecta la forma",
+                               help="Quant costa simplificar el relleu, les vores i el dibuix de "
+                                    "la textura respecte de la resta (0 = com la ràpida).")
+        src = (models[0].name, len(models[0].getvalue()), orient)
+        if method == "Respecta la forma" and len(mesh.faces) > target:
+            red_cache = st.session_state.setdefault("_reduccio", {})
+            key = (src, target, sym, detail)
+            if key not in red_cache:
+                red_cache.clear()
+                with st.spinner("Reduint la malla respectant la forma…"):
+                    red_cache[key] = reduccio.reduce(mesh, target, sym, float(detail), texture,
+                                                     mesh if texture is not None else None)
+            reduced, red_info = red_cache[key]
+            # Les branques fan servir aquesta reducció (papercraft.simplify la reconeix).
+            mesh.metadata["reduccio"] = (target, reduced)
+            if red_info["simetria"]:
+                st.caption(f"Simetria trobada: pla perpendicular a {red_info['simetria']['normal']}"
+                           f" (desviació {100 * red_info['simetria']['error']:.1f} % de la mida).")
+            elif sym != "no":
+                st.caption("El model no és simètric (o no hi cap amb tan poques cares): es "
+                           "redueix sencer.")
         prepared, _ = dc.prepare(mesh, target, size, None)
         frames = dc.face_frames(prepared)
 
         # ---- Vista del model: tal com s'ha carregat i com queda amb la simplificació
         cache = st.session_state.setdefault("_model_view", {})
-        src = (models[0].name, len(models[0].getvalue()))
         if cache.get("src") != src:
             cache.clear()
             cache.update(src=src, original=visor.pack(visor.model_solids(mesh, "Model", "#9fb3c8")))
-        if cache.get("simple_key") != (target, size):
-            cache.update(simple_key=(target, size), simple=visor.pack(visor.model_solids(
+        if cache.get("simple_key") != (target, size, method, sym, detail):
+            cache.update(simple_key=(target, size, method, sym, detail), simple=visor.pack(visor.model_solids(
                 prepared, "Simplificat", "#dcc29a", edges="totes")))
         v1, v2 = st.columns(2)
         with v1:

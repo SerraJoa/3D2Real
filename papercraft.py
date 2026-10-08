@@ -39,6 +39,17 @@ def load_mesh(data: bytes, name: str) -> trimesh.Trimesh:
     return clean(mesh)
 
 
+UPS = {"+Z": [0, 0, 1], "+Y": [0, 1, 0], "-Y": [0, -1, 0], "+X": [1, 0, 0], "-X": [-1, 0, 0],
+       "-Z": [0, 0, -1]}
+
+
+def orientation_matrix(up: str = "+Z", turn: float = 0.0) -> np.ndarray:
+    """Matriu 4×4 que posa l'eix `up` del fitxer amunt (+Z) i després gira `turn` graus al
+    voltant de la vertical. Els GLB/glTF es desen amb la Y amunt ("+Y")."""
+    M = trimesh.geometry.align_vectors(np.array(UPS[up], float), np.array([0.0, 0, 1]))
+    return trimesh.transformations.rotation_matrix(math.radians(turn), [0, 0, 1]) @ M
+
+
 def clean(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     mesh = mesh.copy()
     mesh.merge_vertices()
@@ -48,6 +59,10 @@ def clean(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
 
 
 def simplify(mesh: trimesh.Trimesh, target: int) -> trimesh.Trimesh:
+    # Si ja s'ha reduït abans (reduccio.reduce, que respecta la forma), es fa servir aquella.
+    pre = mesh.metadata.get("reduccio")
+    if pre is not None and pre[0] == target:
+        return pre[1].copy()
     if len(mesh.faces) <= target:
         return mesh.copy()
     for args in (dict(face_count=target), dict(target_faces=target)):

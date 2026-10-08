@@ -5,3 +5,4 @@ shapely
 fast-simplification
 pillow
 manifold3d
+scipy
