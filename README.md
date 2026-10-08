@@ -6,7 +6,8 @@ per construir-la en paper o amb tall làser.
 | Fase | Mòdul | Què fa |
 |---|---|---|
 | Importació | `papercraft.load_mesh` | STL/OBJ → malla neta (vèrtexs fusionats, sense cares degenerades) |
-| Reducció | `papercraft.simplify`, `scale_to` | nombre de cares i mida final en mm |
+| Orientació | `papercraft.orientation_matrix` | quin eix del fitxer va amunt (els GLB, +Y) i gir |
+| Reducció | `reduccio.py`, `papercraft.simplify`, `scale_to` | nombre de cares (fins a 1000) i mida final en mm |
 | Branca 1: desplegable | `papercraft.py` | pàgines de paper per plegar i enganxar (vegeu més avall) |
 | Branca 2: cares | `cares.py` | plaques per a làser, una per zona plana, amb suports per dins |
 | Branca 3: laminació | `laminacio.py` | capes per a làser per apilar, amb columnes passants |
@@ -18,6 +19,24 @@ per construir-la en paper o amb tall làser.
 pip install -r requirements.txt
 streamlit run app.py
 ```
+
+## Orientació i reducció
+
+- **Orientació**: es tria quin eix del fitxer va amunt i un gir al voltant de la vertical. Per
+  defecte, els GLB/glTF (que es desen amb la Y amunt) es posen drets sols. Es pot descarregar
+  el model reorientat en GLB.
+- **Reducció** (fins a 1000 cares; més ja no es pot retallar ni muntar). Totes dues opcions
+  treuen primer les cares que continuen les veïnes sense canviar d'inclinació (el cost de
+  col·lapsar una aresta és quant s'allunya la superfície: en una zona plana és zero).
+  - **Respecta la forma** (per defecte): cada vèrtex té un pes d'importància segons el relleu
+    a l'escala dels triangles que quedaran (conques, plecs, vores) i, si hi ha textura, el
+    contrast del dibuix (uns ulls o una boca pintats); els detalls reben més triangles. Els
+    col·lapses es fan per rondes (els més barats que no es toquen entre ells, alhora), de
+    manera que dues zones equivalents, com un ull i l'altre, es tracten igual. Per anar de
+    pressa, primer es fa una reducció ràpida fins a unes 12 vegades l'objectiu.
+  - **Simetria** (opcional, desactivada): si el model ja és simètric, se'n simplifica una
+    meitat i se'n fa el mirall. No s'inventa: si no ho és, o no hi cap, no s'aplica.
+  - **Ràpida**: només l'error geomètric global (fast-simplification).
 
 ## Què fa
 
