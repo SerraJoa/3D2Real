@@ -214,9 +214,11 @@ def _texture_contrast(texture, src: trimesh.Trimesh, dst: trimesh.Trimesh) -> np
 # ---------------------------------------------------------------- QEM amb pesos
 
 def qem(V: np.ndarray, F: np.ndarray, target: int, weight: np.ndarray,
-        plane: tuple[np.ndarray, np.ndarray] | None = None):
+        plane: tuple[np.ndarray, np.ndarray] | None = None, locked: np.ndarray | None = None):
     """Simplificació per col·lapse d'arestes (Garland–Heckbert) amb un pes per vèrtex.
 
+    `locked`: vèrtexs fixos (punts clau): no es mouen ni desapareixen; el que s'hi ajunta
+    queda al seu lloc.
     `plane` (punt, normal): els vèrtexs que hi són hi queden (tall de simetria). Les vores
     obertes porten quadriques de restricció i no es pleguen. Es comprova que cap triangle no
     es giri i que la malla segueixi sent una superfície (condició d'enllaç).
@@ -275,8 +277,15 @@ def qem(V: np.ndarray, F: np.ndarray, target: int, weight: np.ndarray,
         h = np.append(x, 1.0)
         return float(h @ q @ h)
 
+    fixed = np.zeros(nv, bool) if locked is None else locked.astype(bool).copy()
+
     def best(a: int, b: int):
         q = Q[a] + Q[b]
+        if fixed[a] and fixed[b]:
+            return math.inf, None
+        if fixed[a] or fixed[b]:
+            x = V[a] if fixed[a] else V[b]
+            return cost_of(q, x), x
         if on_plane[a] != on_plane[b]:  # el del pla no se'n pot moure
             x = V[a] if on_plane[a] else V[b]
             return cost_of(q, x), x
@@ -299,8 +308,10 @@ def qem(V: np.ndarray, F: np.ndarray, target: int, weight: np.ndarray,
 
     def collapse(a: int, b: int) -> bool:
         """Col·lapsa l'aresta (a, b) a a, si és vàlid. Retorna si s'ha fet."""
-        if not vfaces[a] or not vfaces[b]:
+        if not vfaces[a] or not vfaces[b] or (fixed[a] and fixed[b]):
             return False
+        if fixed[b]:  # es queda el fix
+            a, b = b, a
         shared = vfaces[a] & vfaces[b]
         if not shared:
             return False
@@ -357,10 +368,14 @@ def qem(V: np.ndarray, F: np.ndarray, target: int, weight: np.ndarray,
             a, b = int(E[i][0]), int(E[i][1])
             if locked[a] or locked[b]:
                 continue
+            if not math.isfinite(costs[i]):
+                break
             if collapse(a, b):
                 done += 1
-                locked[a] = True
-                locked[list(neighbours(a))] = True
+                for v in (a, b):  # el que queda pot ser qualsevol dels dos
+                    if vfaces[v]:
+                        locked[v] = True
+                        locked[list(neighbours(v))] = True
         if not done:
             break
         faces_left = int(alive.sum())
