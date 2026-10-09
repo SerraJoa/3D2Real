@@ -389,12 +389,14 @@ def qem(V: np.ndarray, F: np.ndarray, target: int, weight: np.ndarray,
 # ---------------------------------------------------------------- tot junt
 
 def reduce(mesh: trimesh.Trimesh, target: int, symmetry: str = "no", detail: float = 30.0,
-           texture=None, texture_mesh: trimesh.Trimesh | None = None):
+           texture=None, texture_mesh: trimesh.Trimesh | None = None, harmonize_: bool = True):
     """Simplifica `mesh` a unes `target` cares respectant la forma.
 
     `symmetry`: "no" (per defecte: no s'imposa cap simetria), "auto" (si el model ja és
     simètric, el resultat ho és exactament), o "x", "y", "z" (força aquell pla pel centre).
-    `detail`: quant pesen els detalls (0 = QEM normal). Retorna (malla, informació).
+    `detail`: quant pesen els detalls (0 = QEM normal). `harmonize_`: pas final que fa els
+    triangles més regulars (vegeu `harmonize`; no s'aplica amb simetria, que trencaria).
+    Retorna (malla, informació).
     """
     import papercraft as pc
     info = {"simetria": None}
@@ -440,6 +442,9 @@ def reduce(mesh: trimesh.Trimesh, target: int, symmetry: str = "no", detail: flo
                 out = plain
     else:
         out = pc.clean(qem(pre.vertices, pre.faces, target, weight))
+    if harmonize_ and info["simetria"] is None:
+        out = pc.clean(harmonize(out, pre))
+        info["harmonitzada"] = True
     return out, info
 
 
@@ -461,3 +466,134 @@ def _nearest_index(a: np.ndarray, b: np.ndarray) -> np.ndarray:
         x = a[i:i + 2048]
         out[i:i + 2048] = ((x ** 2).sum(1)[:, None] + b2[None] - 2 * x @ b.T).argmin(1)
     return out
+
+
+# ---------------------------------------------------------------- harmonització
+
+def min_angles(m: trimesh.Trimesh) -> np.ndarray:
+    """Angle mínim de cada triangle, en graus (els prims en tenen un de molt petit)."""
+    return np.degrees(m.face_angles.min(1))
+
+
+def harmonize(m: trimesh.Trimesh, ref: trimesh.Trimesh, rounds: int = 4, flat_deg: float = 8.0,
+              sharp_deg: float = 25.0, step: float = 0.5, samples: int = 150000) -> trimesh.Trimesh:
+    """Fa la malla més regular sense perdre forma.
+
+    1. Gira arestes: on dos triangles són gairebé al mateix pla (menys de `flat_deg`) i la
+       diagonal no és la de Delaunay (els dos angles oposats sumen més de 180°), es canvia
+       per l'altra diagonal: menys triangles prims, la mateixa superfície.
+    2. Relaxa vèrtexs: cada vèrtex es mou cap al centre dels veïns només en la direcció
+       tangent i es torna a enganxar a la superfície original `ref`. No es mouen els vèrtexs
+       de vores obertes ni els d'arestes vives (més de `sharp_deg`), que són els detalls.
+       Si un triangle es giraria, el vèrtex no es mou.
+    """
+    V = m.vertices.astype(float).copy()
+    F = m.faces.copy()
+    pts, fidx = trimesh.sample.sample_surface(ref, samples, seed=21)
+    pn = ref.face_normals[fidx]
+    tree = cKDTree(pts) if cKDTree is not None else None
+
+    def face_normals(F_, V_):
+        n = np.cross(V_[F_[:, 1]] - V_[F_[:, 0]], V_[F_[:, 2]] - V_[F_[:, 0]])
+        return n / np.maximum(np.linalg.norm(n, axis=1), 1e-12)[:, None]
+
+    def flips():
+        nonlocal F
+        nrm = face_normals(F, V)
+        edges = {}
+        for fi, f in enumerate(F):
+            for k in range(3):
+                a, b = int(f[k]), int(f[(k + 1) % 3])
+                edges.setdefault((min(a, b), max(a, b)), []).append(fi)
+        existing = set(edges)
+        touched = set()
+        count = 0
+        for (a, b), fs in edges.items():
+            if len(fs) != 2 or fs[0] in touched or fs[1] in touched:
+                continue
+            f1, f2 = fs
+            if nrm[f1] @ nrm[f2] < math.cos(math.radians(flat_deg)):
+                continue
+            c = int(next(v for v in F[f1] if v not in (a, b)))
+            d = int(next(v for v in F[f2] if v not in (a, b)))
+            if (min(c, d), max(c, d)) in existing or c == d:
+                continue
+
+            def ang(p, q, r):  # angle a p entre q i r
+                u, w = V[q] - V[p], V[r] - V[p]
+                return math.acos(np.clip(u @ w / (np.linalg.norm(u) * np.linalg.norm(w) + 1e-12), -1, 1))
+            if ang(c, a, b) + ang(d, a, b) <= math.pi + 1e-9:
+                continue  # ja és la diagonal bona
+            # Ordre de les cares nous igual que l'original (a→b a f1).
+            f = list(F[f1])
+            i = f.index(a)
+            if f[(i + 1) % 3] != b:
+                a, b = b, a
+            t1, t2 = [a, d, c], [d, b, c]
+            new = np.array([t1, t2])
+            nn = face_normals(new, V)
+            if (nn @ nrm[f1]).min() < 0.9:
+                continue
+            old_min = min(min_angle_tri(F[f1]), min_angle_tri(F[f2]))
+            if min(min_angle_tri(t1), min_angle_tri(t2)) <= old_min:
+                continue
+            F[f1], F[f2] = t1, t2
+            touched |= {f1, f2}
+            existing.discard((min(a, b), max(a, b)))
+            existing.add((min(c, d), max(c, d)))
+            count += 1
+        return count
+
+    def min_angle_tri(f):
+        p = V[list(f)]
+        out = math.pi
+        for k in range(3):
+            u, w = p[(k + 1) % 3] - p[k], p[(k + 2) % 3] - p[k]
+            out = min(out, math.acos(np.clip(u @ w / (np.linalg.norm(u) * np.linalg.norm(w) + 1e-12), -1, 1)))
+        return out
+
+    for _ in range(3):
+        if not flips():
+            break
+
+    mm = trimesh.Trimesh(V, F, process=False)
+    fixed = np.zeros(len(V), bool)
+    if len(mm.face_adjacency):
+        sharp = mm.face_adjacency_angles > math.radians(sharp_deg)
+        fixed[mm.face_adjacency_edges[sharp].ravel()] = True
+    lone = trimesh.grouping.group_rows(mm.edges_sorted, require_count=1)
+    fixed[mm.edges_sorted[lone].ravel()] = True
+    nbr = [set() for _ in range(len(V))]
+    vf = [[] for _ in range(len(V))]
+    for fi, f in enumerate(F):
+        for k in range(3):
+            nbr[f[k]] |= {int(f[(k + 1) % 3]), int(f[(k + 2) % 3])}
+            vf[f[k]].append(fi)
+    for _ in range(rounds):
+        nrm = face_normals(F, V)
+        vn = np.zeros_like(V)
+        for k in range(3):
+            np.add.at(vn, F[:, k], nrm)
+        vn /= np.maximum(np.linalg.norm(vn, axis=1), 1e-12)[:, None]
+        newV = V.copy()
+        for v in range(len(V)):
+            if fixed[v] or not nbr[v]:
+                continue
+            cen = V[list(nbr[v])].mean(0)
+            mv = cen - V[v]
+            mv -= (mv @ vn[v]) * vn[v]
+            newV[v] = V[v] + step * mv
+        # Torna a la superfície original: al pla tangent del punt de mostra més proper.
+        free = ~fixed
+        if tree is not None and free.any():
+            _, j = tree.query(newV[free])
+            p, n_ = pts[j], pn[j]
+            newV[free] -= (((newV[free] - p) * n_).sum(1))[:, None] * n_
+        # Cap triangle girat: on passaria, el vèrtex no es mou.
+        nn = face_normals(F, newV)
+        bad = (nn * nrm).sum(1) < 0.5
+        if bad.any():
+            for fi in np.nonzero(bad)[0]:
+                newV[F[fi]] = V[F[fi]]
+        V = newV
+    return trimesh.Trimesh(V, F, process=False)

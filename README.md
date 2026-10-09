@@ -36,6 +36,11 @@ streamlit run app.py
     pressa, primer es fa una reducció ràpida fins a unes 12 vegades l'objectiu.
   - **Simetria** (opcional, desactivada): si el model ja és simètric, se'n simplifica una
     meitat i se'n fa el mirall. No s'inventa: si no ho és, o no hi cap, no s'aplica.
+  - **Harmonitzar** (activat): pas final que fa els triangles més regulars sense perdre forma.
+    Gira la diagonal on dos triangles són gairebé al mateix pla i la diagonal no és la de
+    Delaunay, i relaxa cada vèrtex cap al centre dels veïns en direcció tangent, tornant-lo a
+    la superfície original. Les vores vives (més de 25°) i les obertes no es mouen. No
+    s'aplica amb simetria.
   - **Ràpida**: només l'error geomètric global (fast-simplification).
 
 ## Què fa
