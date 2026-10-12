@@ -15,6 +15,13 @@ per construir-la en paper o amb tall làser.
 | Decoració | `decor.py`, `dibuix.py` | textures, imatges, patrons i dibuixos a les cares, amb o sense marc |
 | Vista del muntatge | `visor.py` | el resultat de cada branca en 3D, muntat, per girar, separar i tallar |
 
+**Windows**: doble clic a `iniciar.bat`. El primer cop crea un entorn de Python (`.venv`) i
+hi instal·la les dependències (uns minuts); les vegades següents obre l'app directament (i
+reinstal·la només si `requirements.txt` ha canviat). Cal Python 3.10 o més nou
+(python.org, marcant "Add python.exe to PATH").
+
+**Altres sistemes** (o a mà):
+
 ```bash
 pip install -r requirements.txt
 streamlit run app.py

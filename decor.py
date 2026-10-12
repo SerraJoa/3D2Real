@@ -106,7 +106,9 @@ def load_textured(files: dict[str, bytes]):
     main = next((n for n in files if n.lower().endswith((".obj", ".glb", ".gltf"))), None)
     if main is None:
         main = next(n for n in files if n.lower().endswith(".stl"))
-    with tempfile.TemporaryDirectory() as tmp:
+    # A Windows un fitxer obert no es pot esborrar: si alguna imatge queda oberta, el directori
+    # temporal no ha de fer fallar la càrrega.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         for name, data in files.items():
             with open(os.path.join(tmp, os.path.basename(name)), "wb") as f:
                 f.write(data)
@@ -122,7 +124,11 @@ def load_textured(files: dict[str, bytes]):
         mat = getattr(vis, "material", None)
         img = getattr(mat, "image", None) or getattr(mat, "baseColorTexture", None)
         if uv is not None and img is not None and len(uv) == len(mesh.vertices):
-            tex = Texture(img.convert("RGB"), np.asarray(uv)[mesh.faces].astype(float))
+            rgb = img.convert("RGB")
+            rgb.load()  # les dades a memòria: el fitxer ja no cal
+            tex = Texture(rgb, np.asarray(uv)[mesh.faces].astype(float))
+        if img is not None and hasattr(img, "close"):
+            img.close()
         mesh = trimesh.Trimesh(mesh.vertices.copy(), mesh.faces.copy(), process=False)
     return mesh, tex
 
