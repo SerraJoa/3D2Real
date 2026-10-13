@@ -1,5 +1,8 @@
 # Desplegables
 
+> **Manual d'ús**: [INSTRUCCIONS.md](INSTRUCCIONS.md) — com instal·lar-ho (Windows: doble clic a
+> `iniciar.bat`) i com fer servir cada opció.
+
 Generador de volums per a retallar: carrega una malla 3D (STL o OBJ) i obté els fitxers
 per construir-la en paper o amb tall làser.
 
