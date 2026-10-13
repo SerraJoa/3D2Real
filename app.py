@@ -184,7 +184,7 @@ if models:
                                     "canviar d'inclinació, i al final les vores i els detalls.")
         with c2:
             size = st.number_input("Mida final — costat més llarg (mm)", 20.0, 2000.0, 120.0, 10.0)
-        r1, r2, r3 = st.columns([2, 1, 1])
+        r1, r2, r3, r4 = st.columns([2, 1, 1, 1])
         with r1:
             method = st.radio("Reducció", ["Respecta la forma", "Ràpida"], horizontal=True,
                               help="Respecta la forma: dona més triangles als detalls (relleu, "
@@ -202,15 +202,20 @@ if models:
             detail = st.slider("Pes dels detalls", 0, 60, 30, disabled=method != "Respecta la forma",
                                help="Quant costa simplificar el relleu, les vores i el dibuix de "
                                     "la textura respecte de la resta (0 = com la ràpida).")
+        with r4:
+            harm = st.checkbox("Harmonitzar", True, disabled=method != "Respecta la forma",
+                               help="Pas final: gira arestes i relaxa vèrtexs perquè els triangles "
+                                    "siguin més regulars (menys de prims), sense moure les vores "
+                                    "vives ni sortir de la superfície. No s'aplica amb simetria.")
         src = (models[0].name, len(models[0].getvalue()), orient)
         if method == "Respecta la forma" and len(mesh.faces) > target:
             red_cache = st.session_state.setdefault("_reduccio", {})
-            key = (src, target, sym, detail)
+            key = (src, target, sym, detail, harm)
             if key not in red_cache:
                 red_cache.clear()
                 with st.spinner("Reduint la malla respectant la forma…"):
                     red_cache[key] = reduccio.reduce(mesh, target, sym, float(detail), texture,
-                                                     mesh if texture is not None else None)
+                                                     mesh if texture is not None else None, harm)
             reduced, red_info = red_cache[key]
             # Les branques fan servir aquesta reducció (papercraft.simplify la reconeix).
             mesh.metadata["reduccio"] = (target, reduced)
@@ -228,8 +233,8 @@ if models:
         if cache.get("src") != src:
             cache.clear()
             cache.update(src=src, original=visor.pack(visor.model_solids(mesh, "Model", "#9fb3c8")))
-        if cache.get("simple_key") != (target, size, method, sym, detail):
-            cache.update(simple_key=(target, size, method, sym, detail), simple=visor.pack(visor.model_solids(
+        if cache.get("simple_key") != (target, size, method, sym, detail, harm):
+            cache.update(simple_key=(target, size, method, sym, detail, harm), simple=visor.pack(visor.model_solids(
                 prepared, "Simplificat", "#dcc29a", edges="totes")))
         v1, v2 = st.columns(2)
         with v1:

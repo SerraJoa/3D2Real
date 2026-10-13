@@ -1,5 +1,8 @@
 # Desplegables
 
+> **Manual d'ús**: [INSTRUCCIONS.md](INSTRUCCIONS.md) — com instal·lar-ho (Windows: doble clic a
+> `iniciar.bat`) i com fer servir cada opció.
+
 Generador de volums per a retallar: carrega una malla 3D (STL o OBJ) i obté els fitxers
 per construir-la en paper o amb tall làser.
 
@@ -14,6 +17,13 @@ per construir-la en paper o amb tall làser.
 | Planxes | `laser.py` | peces planes comunes i col·locació a la planxa (vermell = tallar, blau = gravar) |
 | Decoració | `decor.py`, `dibuix.py` | textures, imatges, patrons i dibuixos a les cares, amb o sense marc |
 | Vista del muntatge | `visor.py` | el resultat de cada branca en 3D, muntat, per girar, separar i tallar |
+
+**Windows**: doble clic a `iniciar.bat`. El primer cop crea un entorn de Python (`.venv`) i
+hi instal·la les dependències (uns minuts); les vegades següents obre l'app directament (i
+reinstal·la només si `requirements.txt` ha canviat). Cal Python 3.10 o més nou
+(python.org, marcant "Add python.exe to PATH").
+
+**Altres sistemes** (o a mà):
 
 ```bash
 pip install -r requirements.txt
@@ -36,6 +46,11 @@ streamlit run app.py
     pressa, primer es fa una reducció ràpida fins a unes 12 vegades l'objectiu.
   - **Simetria** (opcional, desactivada): si el model ja és simètric, se'n simplifica una
     meitat i se'n fa el mirall. No s'inventa: si no ho és, o no hi cap, no s'aplica.
+  - **Harmonitzar** (activat): pas final que fa els triangles més regulars sense perdre forma.
+    Gira la diagonal on dos triangles són gairebé al mateix pla i la diagonal no és la de
+    Delaunay, i relaxa cada vèrtex cap al centre dels veïns en direcció tangent, tornant-lo a
+    la superfície original. Les vores vives (més de 25°) i les obertes no es mouen. No
+    s'aplica amb simetria.
   - **Ràpida**: només l'error geomètric global (fast-simplification).
 
 ## Què fa

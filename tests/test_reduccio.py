@@ -97,3 +97,15 @@ def test_orientacio():
     for up, v in pc.UPS.items():
         assert np.allclose(pc.orientation_matrix(up)[:3, :3] @ v, [0, 0, 1])
     assert np.allclose(pc.orientation_matrix("+Z", 90)[:3, :3] @ [1, 0, 0], [0, 1, 0])
+
+
+def test_harmonitzacio_fa_triangles_mes_regulars():
+    """Menys triangles prims i la mateixa forma (la desviació gairebé no canvia)."""
+    m = cara()
+    crua, _ = rd.reduce(m, 300, harmonize_=False)
+    harm, info = rd.reduce(m, 300)
+    assert info.get("harmonitzada") and harm.is_watertight
+    assert len(harm.faces) == len(crua.faces)
+    assert np.median(rd.min_angles(harm)) > np.median(rd.min_angles(crua)) + 2
+    diag = np.linalg.norm(m.extents)
+    assert rd.deviation(m, harm) < rd.deviation(m, crua) + 0.003 * diag
