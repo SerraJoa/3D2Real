@@ -112,9 +112,21 @@ def test_laser_tallar_deixa_marc_i_respecta_ranures():
     b = next(p for p in amb.parts if p.name == "C2").shape
     assert b.area < a.area
     slots = [Polygon(h) for h in a.interiors]
-    new = [Polygon(h) for h in b.interiors if not any(Polygon(h).equals_exact(s, 1e-3) for s in slots)]
+    # Decoratius: els forats que no són ranures (rectangles) ni ja hi eren sense decoració.
+    rect = lambda g: g.area / g.minimum_rotated_rectangle.area > 0.97
+    new = [Polygon(h) for h in b.interiors
+           if not rect(Polygon(h)) and not any(Polygon(h).equals_exact(s, 1e-3) for s in slots)]
     assert new
     outer = Polygon(b.exterior)
     for h in new:
         assert h.distance(outer.exterior) >= dc.CUT_MIN_FRAME - 0.01   # el marc mínim
         assert all(h.distance(s) >= 2.0 - 0.01 for s in slots)        # lluny de les ranures
+
+
+def test_textura_manté_les_cares_triades():
+    uv = np.arange(4 * 3 * 2, dtype=float).reshape(4, 3, 2)
+    tex = dc.Texture(None, uv)
+    keep = np.array([True, False, True, False])
+    out = tex.keep(keep)
+    assert out.face_uv.shape == (2, 3, 2)
+    assert np.array_equal(out.face_uv, uv[[0, 2]])

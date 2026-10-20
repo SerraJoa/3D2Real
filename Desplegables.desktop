@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Desplegables
+Comment=3D → paper i làser
+Exec=/home/joaquim/Escriptori/3d2Real/desplegables.sh
+Path=/home/joaquim/Escriptori/3d2Real
+Terminal=true
+Icon=applications-graphics

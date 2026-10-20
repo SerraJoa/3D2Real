@@ -26,6 +26,7 @@ COLUMN_WALL = 2.0     # mm mínims de material entre un forat i la vora
 COLUMN_FIT = 0.1      # mm de joc al forat respecte de la tiga
 COLUMN_SEP = 2.0      # separació mínima entre centres de columnes, en diàmetres
 COLUMNS_PER_PIECE = 2
+LAMP_FIT = 0.3        # mm de joc al pas del portalàmpades
 
 
 def section_polygon(segments2d) -> Polygon:
@@ -347,16 +348,39 @@ ALIGNS = ("columnes", "costella")
 
 def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickness: float = 3.0,
                 column_d: float = 5.0, sheet=(600.0, 400.0), wall: float = 0.0,
-                align: str = "columnes") -> LaserResult:
+                align: str = "columnes", lamp: dict | None = None) -> LaserResult:
     """Capes per apilar. Amb `wall` > 0 es buiden deixant una paret d'aquest gruix (mm).
 
     `align`: "columnes" (tiges passants) o "costella" (només capes buidades: una costella
     vertical dins la cavitat que encaixa en osques de les parets de cada capa).
+
+    `lamp`: pas per a un portalàmpades intern {"x", "y" (mm des del centre de la planta), "z"
+    (mm des de la base on comença), "len" (llargada del pas, mm), "d" (Ø del pas circular),
+    "slot" (amplada d'un canal per lliscar-hi el suport, 0 = cap), "angle" (graus, direcció del
+    canal)}. S'obre a la secció de les capes que cobreix; amb capes buidades la paret les
+    rodeja sola, i els suports de columnes i costelles s'hi adapten.
     """
     m = pc.scale_to(pc.simplify(pc.clean(mesh), target_faces), size_mm)
     z0, z1 = m.bounds[0][2], m.bounds[1][2]
     K = max(1, int(math.ceil((z1 - z0) / thickness - 1e-9)))
     solid = [slice_at(m, z0 + (k + 0.5) * thickness + 1e-7) for k in range(K)]
+    lamp_layers = 0
+    if lamp:
+        lo, hi = m.bounds
+        cx, cy = (lo[0] + hi[0]) / 2 + lamp.get("x", 0.0), (lo[1] + hi[1]) / 2 + lamp.get("y", 0.0)
+        void = Point(cx, cy).buffer(lamp["d"] / 2 + LAMP_FIT, 48)
+        if lamp.get("slot", 0) > 0:
+            ang = math.radians(lamp.get("angle", 0.0))
+            d2, w = np.array([math.cos(ang), math.sin(ang)]), lamp["slot"] / 2 + LAMP_FIT
+            nr, c0 = np.array([-d2[1], d2[0]]), np.array([cx, cy])
+            void = void.union(Polygon([c0 + nr * w, c0 + nr * w + d2 * 5000, c0 - nr * w + d2 * 5000,
+                                       c0 - nr * w]))
+        zb = lamp.get("z", 0.0)
+        for k in range(K):
+            zc = (k + 0.5) * thickness   # pla mig de la capa, des de la base
+            if zb - 1e-6 <= zc <= zb + lamp.get("len", 1e9):
+                solid[k] = solid[k].difference(void)
+                lamp_layers += 1
     use_spine = align == "costella" and wall > 0
     # Les columnes es trien sobre les capes massisses i el buidat les respecta.
     columns = [] if use_spine else place_columns([_islands(g) for g in solid], column_d)
@@ -413,6 +437,11 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
     title = f"Laminació · capes de {thickness:g} mm"
     svgs, groups, oversize = nest(parts, sheet, title)
     notes = [f"{K} capes de {thickness:g} mm ({len(parts)} peces). Munta de L1 (a baix) cap amunt,",
+             *([f"Portalàmpades: pas de Ø{lamp['d']:g} mm"
+                + (f" amb canal de {lamp['slot']:g} mm" if lamp.get("slot") else "")
+                + f" a {lamp_layers} capes (des de {lamp.get('z', 0):g} mm d'alçada)."]
+               if lamp and lamp_layers else
+               (["Portalàmpades: l'alçada indicada no toca cap capa."] if lamp else [])),
              *([f"Buidades amb parets de {wall:g} mm: el contorn gravat de la capa veïna inclou el seu forat."]
                if wall > 0 else []),
              "amb el número llegible a dalt i totes les fletxes cap al mateix costat.",
@@ -428,7 +457,7 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
             notes.append(f"  columna {i}: capes L{a + 1}–L{b + 1}, llargada "
                          f"{(b - a + 1) * thickness:g} mm")
     full = sum(g.area for g in solid)
-    stats = dict(capes=K, peces=len(parts) - len(ribs), columnes=len(columns), costelles=len(ribs),
+    stats = dict(capes_amb_portalampades=lamp_layers, capes=K, peces=len(parts) - len(ribs), columnes=len(columns), costelles=len(ribs),
                  estalvi=round(100 * (1 - sum(g.area for g in geoms) / full)) if full else 0,
                  peces_amb_una_columna=one, peces_sense_columna=none, planxes=len(svgs),
                  massa_grans=oversize)

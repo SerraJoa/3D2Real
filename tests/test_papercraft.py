@@ -286,3 +286,34 @@ def test_col_locacio_per_forma_aprofita_el_paper():
     assert len(pages) == 1
     a, b = (pc.piece_outline(p) for p in pieces)
     assert a.distance(b) >= pc.NEST_GAP - 0.2
+
+
+def _separat(mesh, dx):
+    m = mesh.copy()
+    m.apply_translation([dx, 0, 0])
+    return m
+
+
+def test_peces_soltes_menudes_es_treuen():
+    gran = trimesh.creation.box((40, 30, 20))
+    petita = _separat(trimesh.creation.box((2, 2, 2)), 60)
+    mesh = trimesh.util.concatenate([gran, petita])
+    mask = pc.small_parts(mesh)
+    assert mask.sum() == len(petita.faces)
+    net = pc.keep_faces(mesh, ~mask)
+    assert len(net.faces) == len(gran.faces)
+    assert np.allclose(net.extents, gran.extents)
+
+
+def test_dues_peces_iguals_no_es_treuen():
+    a = trimesh.creation.box((10, 10, 10))
+    mesh = trimesh.util.concatenate([a, _separat(a, 30)])
+    assert not pc.small_parts(mesh).any()
+
+
+def test_costures_de_textura_no_parteixen_la_peca():
+    # Vèrtexs duplicats a la mateixa posició (com en una malla amb costures UV).
+    b = trimesh.creation.box((40, 30, 20))
+    soltes = trimesh.Trimesh(b.vertices[b.faces].reshape(-1, 3),
+                             np.arange(len(b.faces) * 3).reshape(-1, 3), process=False)
+    assert not pc.small_parts(soltes).any()

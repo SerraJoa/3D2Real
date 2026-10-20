@@ -15,6 +15,8 @@ from pathlib import Path
 import numpy as np
 import shapely
 import trimesh
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
 from shapely.geometry import LineString, MultiPoint, Polygon
 from shapely import affinity
 from shapely.ops import unary_union
@@ -39,6 +41,33 @@ def load_mesh(data: bytes, name: str) -> trimesh.Trimesh:
     return clean(mesh)
 
 
+def small_parts(mesh: trimesh.Trimesh, min_rel: float = 0.02) -> np.ndarray:
+    """Màscara de les cares que són d'una peça solta menuda (filaments, restes d'escaneig...).
+
+    Una peça és un conjunt de cares que comparteixen vèrtexs; les costures de la textura
+    (vèrtexs duplicats a la mateixa posició) no la parteixen. Se'n treu la que té menys de
+    `min_rel` de l'àrea de la peça més gran: dues peces iguals no es treuen mai.
+    """
+    if len(mesh.faces) == 0:
+        return np.zeros(0, dtype=bool)
+    m = trimesh.Trimesh(mesh.vertices, mesh.faces, process=False)
+    m.merge_vertices()
+    F = m.faces
+    n = len(m.vertices)
+    g = coo_matrix((np.ones(F.size), (F.ravel(), np.roll(F, 1, axis=1).ravel())), shape=(n, n))
+    _, lab = connected_components(g, directed=False)
+    face_lab = lab[F[:, 0]]
+    area = np.bincount(face_lab, weights=m.area_faces, minlength=lab.max() + 1)
+    return (area < min_rel * area.max())[face_lab]
+
+
+def keep_faces(mesh: trimesh.Trimesh, keep: np.ndarray) -> trimesh.Trimesh:
+    """La malla amb només les cares marcades (sense tocar l'ordre de les que queden)."""
+    out = trimesh.Trimesh(mesh.vertices.copy(), mesh.faces[keep].copy(), process=False)
+    out.remove_unreferenced_vertices()
+    return out
+
+
 UPS = {"+Z": [0, 0, 1], "+Y": [0, 1, 0], "-Y": [0, -1, 0], "+X": [1, 0, 0], "-X": [-1, 0, 0],
        "-Z": [0, 0, -1]}
 
@@ -55,6 +84,8 @@ def clean(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     mesh.merge_vertices()
     mesh.update_faces(mesh.nondegenerate_faces())
     mesh.remove_unreferenced_vertices()
+    if mesh.is_watertight and mesh.volume < 0:  # del revés (normals cap a dins): es gira
+        mesh.invert()
     return mesh
 
 

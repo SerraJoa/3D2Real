@@ -6,3 +6,4 @@ fast-simplification
 pillow
 manifold3d
 scipy
+scikit-image

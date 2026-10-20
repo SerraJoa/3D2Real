@@ -197,6 +197,25 @@ class LaserResult:
                 z.writestr(f"{prefix}_muntatge.txt", "\n".join(self.notes) + "\n")
         return buf.getvalue()
 
+    def stl_zip(self, prefix: str, bed: tuple[float, float] | None = None) -> tuple[bytes, list[str]]:
+        """Un STL per peça, estirada al gruix i plana al llit (cantonada a 0,0,0), per a l'slicer.
+
+        Torna el ZIP i els noms de les peces que no caben al `bed` (en cap dels dos sentits).
+        """
+        buf = io.BytesIO()
+        big = []
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            for name, shape, _M, z0, z1 in self.extra["assembly"]:
+                m = solid(shape, np.eye(4), 0.0, z1 - z0)
+                if m is None:
+                    continue
+                m.apply_translation(-m.bounds[0])
+                w, h = m.extents[:2]
+                if bed and not (w <= bed[0] and h <= bed[1] or w <= bed[1] and h <= bed[0]):
+                    big.append(name)
+                z.writestr(f"{prefix}_{name}.stl", m.export(file_type="stl"))
+        return buf.getvalue(), big
+
 
 def nest(parts: list[Part], sheet: tuple[float, float], title: str, images: dict | None = None
          ) -> tuple[list[str], list[list[Part]], int]:

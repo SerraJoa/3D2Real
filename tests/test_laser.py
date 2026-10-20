@@ -69,8 +69,9 @@ def test_plaques_de_la_caixa_retirades_pel_gruix(caixa):
                      key=lambda p: -p.shape.area)
     # Cara de 120×90 retirada 3 mm a cada costat → 114×84, menys les ranures.
     gran = plaques[0].shape
-    assert Polygon(gran.exterior).area == pytest.approx(114 * 84, rel=1e-3)
-    assert len(gran.interiors) > 0
+    x0, y0, x1, y1 = gran.bounds   # les ranures obertes al cantell són osques del contorn
+    assert sorted((x1 - x0, y1 - y0)) == pytest.approx([84, 114], abs=0.05)
+    assert 0.9 * 114 * 84 < gran.area < 114 * 84
 
 
 def test_espai_entre_cares_retira_mes(caixa):
@@ -335,3 +336,133 @@ def test_una_cintura_parteix_la_costella():
     assert len(ribs) == 2
     shared = set.intersection(*({t for _, t, _ in p.labels} for p in ribs))
     assert len(shared) == 1
+
+
+def _fora_del_model(r, prefix: str) -> float:
+    """Volum màxim d'una peça muntada (suport o costella) que surt de la superfície del model."""
+    worst = 0.0
+    for name, shape, M, z0, z1 in r.extra["assembly"]:
+        if name.startswith(prefix):
+            s = laser.solid(shape, M, z0, z1)
+            out = trimesh.boolean.difference([s, r.extra["mesh"]], engine="manifold")
+            worst = max(worst, 0.0 if out.is_empty else float(out.volume))
+    return worst
+
+
+def test_les_costelles_no_sobresurten_de_la_superficie():
+    pytest.importorskip("manifold3d")
+    r = cares.make_faces(_ninot(), 60, 120, 3.0, 0.0, chamfer_mm=1.0)
+    assert r.stats["costelles"] >= 1
+    assert _fora_del_model(r, "K") < 0.5   # els tenons acaben a ras de la cara de fora, de biaix o no
+
+
+def test_stl_per_peca_plans_i_al_gruix(caixa):
+    import io
+    import zipfile
+    data, big = caixa.stl_zip("t", bed=(1000, 1000))
+    assert big == []
+    z = zipfile.ZipFile(io.BytesIO(data))
+    names = z.namelist()
+    assert len(names) == len(caixa.extra["assembly"])
+    for n in names:
+        m = trimesh.load(io.BytesIO(z.read(n)), file_type="stl")
+        assert np.allclose(m.bounds[0], 0, atol=1e-6) and abs(m.extents[2] - 3.0) < 1e-3
+    assert caixa.stl_zip("t", bed=(5, 5))[1]  # amb un llit minúscul cap peça no hi cap
+
+
+def test_un_sol_tenó_continu_per_tot_el_braç():
+    spans = cares.tenon_spans(2.0, 25.0, 3.0)
+    assert spans == [(pytest.approx(2.02), pytest.approx(26.0))]
+    assert cares.tenon_spans(2.0, 2.0, 3.0) == []
+    # Si la ranura llarga no hi cap, es proven trams més curts a la punta.
+    opts = cares.tenon_options(2.0, 25.0, 3.0)
+    assert opts[0] == spans[0] and len(opts) > 1
+    assert all(u0 >= 2.0 and u1 <= 26.0 and u1 - u0 >= cares.TENON_MIN - 1e-9 for u0, u1 in opts)
+
+
+def test_escala_placa_i_braç_automàtic(caixa):
+    p = cares.plate_scale(trimesh.creation.box((60, 40, 30)))
+    assert 30 < p < 60
+    assert cares.auto_bracket(60, 2.0, 3.0) == 30
+    assert cares.auto_bracket(5, 2.0, 3.0) == 5       # mínim 1,5 gruixos
+    assert cares.auto_bracket(500, 1.0, 3.0) == 60
+
+
+def test_un_suport_per_aresta_centrat():
+    r = cares.make_faces(trimesh.creation.box((60, 40, 30)), 200, 80, 3.0, per_edge=1)
+    por_aresta = {}
+    for p in r.parts:
+        if p.name.startswith("S"):
+            por_aresta.setdefault(p.name.split(".")[0], []).append(p)
+    assert por_aresta and all(len(v) == 1 for v in por_aresta.values())
+
+
+def test_agafar_plaques_petites_uneix_mes_sense_trencar_res():
+    pytest.importorskip("manifold3d")
+    m = _ninot()
+    a = cares.make_faces(m, 60, 120, 3.0, grip=False)
+    b = cares.make_faces(m, 60, 120, 3.0, grip=True)
+    assert b.stats["grups_de_plaques"] <= a.stats["grups_de_plaques"]
+    assert b.stats["arestes_sense_suport"] <= a.stats["arestes_sense_suport"]
+
+
+def test_buidar_un_suport_gran_deixa_una_paret_contínua():
+    disc = Point(0, 0).buffer(16.0).difference(Polygon([(0, 0), (-4, 16), (4, 16)]))
+    out = cares.hollow(disc, 3.0)
+    assert out.geom_type == "Polygon" and len(out.interiors) == 1
+    assert out.area < 0.7 * disc.area and out.is_valid
+    assert cares.hollow(Point(0, 0).buffer(5.0), 3.0).equals(Point(0, 0).buffer(5.0))  # petit: no es toca
+
+
+def test_portalampades_a_cares_costella_massissa_amb_forat():
+    m = trimesh.creation.box((120, 120, 120))
+    r = cares.make_faces(m, 400, 120, 3.0, 0.0, lamp=dict(z=60, d=40, slot=0, angle=0, x=0, y=0))
+    assert any("Portalàmpades: costella" in n for n in r.notes)
+    rib = [p for p in r.parts if p.name.startswith("K")]
+    assert rib and any(len(g.interiors) and Polygon(g.interiors[0]).area > 0.9 * np.pi * 20 ** 2
+                       for p in rib for g in getattr(p.shape, "geoms", [p.shape]))
+
+
+def test_portalampades_massa_gran_avisa():
+    m = trimesh.creation.box((40, 40, 40))
+    r = cares.make_faces(m, 400, 40, 3.0, 0.0, lamp=dict(z=20, d=60, slot=0, angle=0, x=0, y=0))
+    assert any("no hi cap" in n for n in r.notes)
+
+
+def test_paper_difusor_tires_amb_osques_pels_suports():
+    m = trimesh.creation.box((40, 30, 20))
+    r = cares.make_faces(m, 400, 120, 3.0, 4.0, paper=True, paper_margin=5.0)
+    assert r.stats["tires_de_paper"] >= r.stats["arestes"]   # una per aresta com a mínim
+    assert len(r.sheets) >= 2 and "Paper" in r.sheets[-1]
+    sense = cares.make_faces(m, 400, 120, 3.0, 4.0)
+    assert sense.stats["tires_de_paper"] == 0
+
+
+def test_portalampades_obre_un_pas_a_les_capes_de_l_alcada():
+    from shapely.geometry import Point
+    m = trimesh.creation.cylinder(30, 80, sections=40)
+    r = lm.make_layers(m, 300, 80, 3.0, lamp=dict(x=0, y=0, z=20, len=30, d=24, slot=10, angle=0))
+    assert r.stats["capes_amb_portalampades"] == 10
+    capes = {n: sh for n, sh, *_ in r.extra["assembly"]}
+    mig = capes["L14"]        # a 20..50 mm: dins del rang
+    assert not mig.intersects(Point(0, 0).buffer(11.5))
+    assert capes["L2"].intersects(Point(0, 0).buffer(5))  # una capa de baix, intacta
+
+
+def test_paper_difusor_es_una_pinta_unida_pel_llom():
+    m = trimesh.creation.box((120, 120, 120))
+    r = cares.make_faces(m, 400, 120, 3.0, 4.0, bracket_mm=20,
+                         lamp=dict(z=60, d=40, slot=12, angle=0, x=0, y=0), paper=True)
+    pap = dict((n, s) for n, s, *_ in r.paper)
+    assert pap and all(s.geom_type == "Polygon" for s in pap.values())   # una peça sola per aresta
+    assert any(len(s.exterior.coords) > 5 for s in pap.values())         # amb osques (dents)
+
+
+def test_paper_pegat_per_vertex_amb_xamfra():
+    m = trimesh.creation.box((40, 30, 20))
+    a = cares.make_faces(m, 400, 120, 3.0, 4.0, paper=True)
+    b = cares.make_faces(m, 400, 120, 3.0, 4.0, paper=True, chamfer_mm=3.0)
+    names = [n for n, *_ in b.paper]
+    assert sum(n.startswith("V") for n in names) == 8      # un pegat per vèrtex del cub
+    assert not any(n.startswith("V") for n, *_ in a.paper)
+    assert sum(not n.startswith("V") for n in names) == len(a.paper)   # les pintes no canvien

@@ -389,13 +389,15 @@ def qem(V: np.ndarray, F: np.ndarray, target: int, weight: np.ndarray,
 # ---------------------------------------------------------------- tot junt
 
 def reduce(mesh: trimesh.Trimesh, target: int, symmetry: str = "no", detail: float = 30.0,
-           texture=None, texture_mesh: trimesh.Trimesh | None = None, harmonize_: bool = True):
+           texture=None, texture_mesh: trimesh.Trimesh | None = None, harmonize_: bool = True,
+           flatten: bool = True):
     """Simplifica `mesh` a unes `target` cares respectant la forma.
 
     `symmetry`: "no" (per defecte: no s'imposa cap simetria), "auto" (si el model ja és
     simètric, el resultat ho és exactament), o "x", "y", "z" (força aquell pla pel centre).
     `detail`: quant pesen els detalls (0 = QEM normal). `harmonize_`: pas final que fa els
     triangles més regulars (vegeu `harmonize`; no s'aplica amb simetria, que trencaria).
+    `flatten`: posa al mateix pla les cares veïnes gairebé coplanars (vegeu `planarize`).
     Retorna (malla, informació).
     """
     import papercraft as pc
@@ -445,6 +447,10 @@ def reduce(mesh: trimesh.Trimesh, target: int, symmetry: str = "no", detail: flo
     if harmonize_ and info["simetria"] is None:
         out = pc.clean(harmonize(out, pre))
         info["harmonitzada"] = True
+    if flatten and info["simetria"] is None:  # amb simetria, es trencaria
+        out, n_flat = planarize(out)
+        out = pc.clean(out)
+        info["aplanades"] = n_flat
     return out, info
 
 
@@ -597,3 +603,229 @@ def harmonize(m: trimesh.Trimesh, ref: trimesh.Trimesh, rounds: int = 4, flat_de
                 newV[F[fi]] = V[F[fi]]
         V = newV
     return trimesh.Trimesh(V, F, process=False)
+
+
+# ---------------------------------------------------------------- zones planes
+
+def planarize(m: trimesh.Trimesh, tol_deg: float = 8.0, dist_frac: float = 0.012,
+              min_faces: int = 2) -> tuple[trimesh.Trimesh, int]:
+    """Posa exactament al mateix pla les cares veïnes que ja hi són gairebé (una base, una cara
+    de caixa), perquè es tallin com una sola placa i el desplegable no les parteixi.
+
+    1. Regions: es creix des de les cares més grans mentre la normal no s'aparti més de `tol_deg`
+       de la de la llavor i cap vèrtex no quedi a més de `dist_frac` × diagonal del pla ajustat.
+    2. Cada vèrtex es porta al pla (o a la intersecció de fins a tres plans) de les regions que
+       toca, el mínim que calgui. Si en toca més de tres, o hauria de córrer massa, la regió
+       més petita es deixa estar; igual si una cara es gira o s'aplana.
+    Retorna la malla (mateixes cares) i el nombre de regions aplanades.
+    """
+    V0 = m.vertices.astype(float)
+    F = m.faces
+    n0, area = m.face_normals, m.area_faces
+    diag = float(np.linalg.norm(m.extents))
+    dtol = dist_frac * diag
+    cos_tol = math.cos(math.radians(tol_deg))
+    adj: list[list[int]] = [[] for _ in F]
+    for a, b in m.face_adjacency:
+        adj[a].append(int(b))
+        adj[b].append(int(a))
+
+    def fit(fs):
+        tri = V0[F[fs]]                                   # (k, 3, 3)
+        w = area[fs]
+        c = (tri.mean(1) * w[:, None]).sum(0) / w.sum()
+        nrm = (n0[fs] * w[:, None]).sum(0)
+        nrm /= np.linalg.norm(nrm)
+        return nrm, float(nrm @ c)
+
+    def far(fs, plane):
+        return float(np.abs(V0[F[fs]].reshape(-1, 3) @ plane[0] - plane[1]).max())
+
+    label = -np.ones(len(F), dtype=int)
+    regions: list[list[int]] = []
+    for seed in np.argsort(-area):
+        if label[seed] >= 0:
+            continue
+        reg, queue = [int(seed)], [int(seed)]
+        label[seed] = len(regions)
+        plane = fit(reg)
+        while queue:
+            f = queue.pop()
+            for g in adj[f]:
+                if label[g] >= 0 or n0[g] @ n0[seed] < cos_tol:
+                    continue
+                if far([g], plane) > dtol:
+                    continue
+                trial = plane if len(reg) > 8 else fit(reg + [g])  # el pla es refina al començar
+                if far(reg + [g], trial) > dtol:
+                    continue
+                reg.append(int(g))
+                label[g] = len(regions)
+                plane = trial
+                queue.append(int(g))
+        if len(reg) >= min_faces:
+            regions.append(reg)
+        else:
+            label[reg[0]] = -2
+    keep = list(range(len(regions)))
+    if not keep:
+        return m, 0
+    planes = [fit(r) for r in regions]
+    rarea = [float(area[r].sum()) for r in regions]
+
+    def solve(active: set[int]):
+        """Vèrtexs nous per a les regions actives; torna també, per vèrtex, la regió a deixar
+        estar (la més petita) si no es pot, o -1."""
+        V = V0.copy()
+        drop = {}
+        touch = [set() for _ in V0]
+        for r in active:
+            for f in regions[r]:
+                for v in F[f]:
+                    touch[v].add(r)
+        for v, rs in enumerate(touch):
+            if not rs:
+                continue
+            ids = sorted(rs, key=lambda r: -rarea[r])
+            N = np.array([planes[r][0] for r in ids])
+            d = np.array([planes[r][1] for r in ids])
+            if len(ids) > 3 or (len(ids) > 1 and np.linalg.svd(N, compute_uv=False)[-1] < 0.1):
+                drop[v] = ids[-1]
+                continue
+            x = V0[v] + N.T @ np.linalg.solve(N @ N.T, d - N @ V0[v])
+            if np.linalg.norm(x - V0[v]) > 3 * dtol:
+                drop[v] = ids[-1]
+                continue
+            V[v] = x
+        return V, drop
+
+    active = set(keep)
+    for _ in range(len(keep) + 6):
+        V, drop = solve(active)
+        if drop:
+            active -= set(drop.values())
+        else:
+            nn = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]])
+            ar = np.linalg.norm(nn, axis=1)
+            bad = (ar < 1e-3 * np.maximum(2 * area, 1e-12)) | \
+                  ((nn / np.maximum(ar, 1e-12)[:, None] * n0).sum(1) < 0.3)
+            if not bad.any():
+                break
+            # Es deixen estar les regions que toquen un vèrtex de la cara estripada.
+            vbad = set(F[bad].ravel().tolist())
+            gone = {r for r in active if vbad & set(F[regions[r]].ravel().tolist())}
+            active -= gone
+        if not active:
+            return m, 0
+    else:
+        return m, 0
+    return trimesh.Trimesh(V, F, process=False), len(active)
+
+
+def absorb_small(m: trimesh.Trimesh, min_size: float, max_move: float | None = None
+                 ) -> tuple[trimesh.Trimesh, int]:
+    """Fusiona les plaques massa petites per rebre un suport amb la veïna més propera.
+
+    Una zona plana és petita si no hi cap un cercle de diàmetre `min_size`. Se'n col·lapsa la
+    vora més curta cap a l'extrem que més plaques toca: la zona desapareix dins la veïna i
+    les altres es retoquen només si són triangles sols (una zona de diverses cares no perd
+    la planitud). No es fa si una cara es giraria, si el col·lapse trencaria la malla, o si
+    el vèrtex s'ha de moure més de `max_move` (per defecte `min_size`).
+    Retorna la malla (menys cares) i el nombre de zones fusionades.
+    """
+    import papercraft as pc
+    from shapely.geometry import Polygon
+    from shapely.ops import unary_union
+
+    max_move = min_size if max_move is None else max_move
+    V = m.vertices.astype(float)
+    F = m.faces.copy()
+    merged = 0
+    stuck: set[frozenset] = set()   # zones (per vèrtexs) que ja s'han provat sense èxit
+
+    def frame(n):
+        h = np.array([1.0, 0, 0]) if abs(n[0]) < 0.9 else np.array([0, 1.0, 0])
+        u = h - (h @ n) * n
+        u /= np.linalg.norm(u)
+        return u, np.cross(n, u)
+
+    def normals(Fs, Vs):
+        c = np.cross(Vs[Fs[:, 1]] - Vs[Fs[:, 0]], Vs[Fs[:, 2]] - Vs[Fs[:, 0]])
+        return c
+
+    for _ in range(4 * len(F)):
+        em = pc.edge_faces(F)
+        tm = trimesh.Trimesh(V, F, process=False)
+        patch = pc.flat_patches(tm, em)
+        members: dict[int, list[int]] = {}
+        for f, p in enumerate(patch):
+            members.setdefault(int(p), []).append(f)
+        fn, ar = tm.face_normals, tm.area_faces
+        vpatches: dict[int, set] = {}
+        for f, p in enumerate(patch):
+            for v in F[f]:
+                vpatches.setdefault(int(v), set()).add(int(p))
+        nbr: dict[int, set] = {}
+        for f in F:
+            for k in range(3):
+                nbr.setdefault(int(f[k]), set()).update((int(f[(k + 1) % 3]), int(f[(k + 2) % 3])))
+
+        def inradius_small(p):
+            n = (fn[members[p]] * ar[members[p], None]).sum(0)
+            n /= np.linalg.norm(n)
+            u, v = frame(n)
+            poly = unary_union([Polygon(np.column_stack([V[F[f]] @ u, V[F[f]] @ v]))
+                                for f in members[p]]).buffer(0)
+            return poly.buffer(-min_size / 2).is_empty
+
+        done = False
+        for p in sorted(members, key=lambda q: ar[members[q]].sum()):
+            key = frozenset(F[members[p]].ravel().tolist())
+            if key in stuck or not inradius_small(p):
+                continue
+            # Vores de la zona, les més curtes primer.
+            edges = []
+            for f in members[p]:
+                for k in range(3):
+                    a, b = int(F[f][k]), int(F[f][(k + 1) % 3])
+                    fs = em.get((min(a, b), max(a, b)), [])
+                    if len(fs) == 2 and all(patch[x] != p for x in fs if x != f):
+                        edges.append((float(np.linalg.norm(V[a] - V[b])), a, b))
+            ok = False
+            for _l, a, b in sorted(edges):
+                fs = em[(min(a, b), max(a, b))]
+                opp = {int(v) for f in fs for v in F[f] if v not in (a, b)}
+                if len(nbr[a] & nbr[b]) != 2 or len(fs) != 2:
+                    continue
+                # El vèrtex que es mou és el que toca menys zones; es queda l'altre.
+                for x, y in sorted(((a, b), (b, a)), key=lambda t: len(vpatches[t[0]])):
+                    if np.linalg.norm(V[x] - V[y]) > max_move:
+                        continue
+                    gone = set(fs)
+                    touch = [f for f in np.nonzero((F == x).any(1))[0] if f not in gone]
+                    if any(len(members[int(patch[f])]) > 1 for f in touch):
+                        continue  # trencaria la planitud d'una zona de diverses cares
+                    F2 = F[touch].copy()
+                    F2[F2 == x] = y
+                    a0, a1 = normals(F[touch], V), normals(F2, V)
+                    if len(touch) and ((a0 * a1).sum(1) < 0.3 * (a0 ** 2).sum(1)).any():
+                        continue
+                    keep = np.ones(len(F), bool)
+                    keep[list(gone)] = False
+                    F = F.copy()
+                    F[touch] = F2
+                    F = F[keep]
+                    ok = True
+                    break
+                if ok:
+                    break
+            if ok:
+                merged += 1
+                done = True
+                break
+            stuck.add(key)
+        if not done:
+            break
+    out = trimesh.Trimesh(V, F, process=False)
+    out.remove_unreferenced_vertices()
+    return out, merged

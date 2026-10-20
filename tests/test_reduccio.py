@@ -109,3 +109,32 @@ def test_harmonitzacio_fa_triangles_mes_regulars():
     assert np.median(rd.min_angles(harm)) > np.median(rd.min_angles(crua)) + 2
     diag = np.linalg.norm(m.extents)
     assert rd.deviation(m, harm) < rd.deviation(m, crua) + 0.003 * diag
+
+
+def test_planarize_uneix_una_base_quasi_plana_en_una_placa():
+    import papercraft as pc
+    m = trimesh.creation.box((60, 40, 30))
+    m = m.subdivide().subdivide()
+    m.vertices[m.vertices[:, 2] < -14.9, 2] += np.random.default_rng(1).uniform(0, 0.6, (m.vertices[:, 2] < -14.9).sum())
+    plates = lambda x: len(np.unique(pc.flat_patches(x, pc.edge_faces(x.faces))))
+    out, n = rd.planarize(m)
+    assert n >= 1 and plates(out) < plates(m)
+    base = out.face_normals[:, 2] < -0.99
+    assert len(np.unique(pc.flat_patches(out, pc.edge_faces(out.faces))[base])) == 1
+    assert np.abs(out.vertices - m.vertices).max() < 1.0
+    assert out.is_watertight and out.volume > 0
+
+
+def test_planarize_no_toca_una_esfera_amb_pocs_triangles_girant_cares():
+    m = trimesh.creation.icosphere(1)
+    out, _ = rd.planarize(m)
+    assert (out.face_normals * m.face_normals).sum(1).min() > 0.3
+
+
+def test_absorb_small_treu_triangles_petits_sense_trencar_la_malla():
+    m = trimesh.creation.icosphere(2)
+    m.apply_scale(30)
+    out, n = rd.absorb_small(m, 12.0)
+    assert n > 0 and len(out.faces) < len(m.faces)
+    assert out.is_watertight and out.volume > 0.8 * m.volume
+    assert rd.absorb_small(m, 0.5)[1] == 0   # res no és tan petit

@@ -11,7 +11,7 @@ per construir-la en paper o amb tall làser.
 | Branca 1: desplegable | `papercraft.py` | pàgines de paper per plegar i enganxar (vegeu més avall) |
 | Branca 2: cares | `cares.py` | plaques per a làser, una per zona plana, amb suports per dins |
 | Branca 3: laminació | `laminacio.py` | capes per a làser per apilar, amb columnes passants |
-| Planxes | `laser.py` | peces planes comunes i col·locació a la planxa (vermell = tallar, blau = gravar) |
+| Planxes | `laser.py` | peces planes comunes i col·locació a la planxa (vermell = tallar, blau = gravar); sortida alternativa: un STL per peça, pla, per a l'slicer d'una impressora 3D (`LaserResult.stl_zip`) |
 | Decoració | `decor.py`, `dibuix.py` | textures, imatges, patrons i dibuixos a les cares, amb o sense marc |
 | Vista del muntatge | `visor.py` | el resultat de cada branca en 3D, muntat, per girar, separar i tallar |
 
@@ -22,6 +22,10 @@ streamlit run app.py
 
 ## Orientació i reducció
 
+- **Peces soltes menudes**: en carregar, l'app proposa treure les peces que no toquen la figura
+  i fan menys del 2 % de l'àrea de la més gran (filaments, restes d'escaneig). Es pot
+  desactivar. Dues peces iguals no es treuen mai, i les costures de la textura no es compten
+  com a peces separades (`papercraft.small_parts`).
 - **Orientació**: es tria quin eix del fitxer va amunt i un gir al voltant de la vertical. Per
   defecte, els GLB/glTF (que es desen amb la Y amunt) es posen drets sols. Es pot descarregar
   el model reorientat en GLB.

@@ -96,6 +96,10 @@ class Texture:
     image: Image.Image
     face_uv: np.ndarray        # (F, 3, 2) coordenades UV de cada cantonada de cada triangle
 
+    def keep(self, mask: np.ndarray) -> "Texture":
+        """La mateixa textura amb només les cares marcades (en l'ordre de la malla)."""
+        return Texture(self.image, self.face_uv[mask])
+
 
 def load_textured(files: dict[str, bytes]):
     """Carrega un model amb textura (OBJ + MTL + imatge, o GLB). Retorna (malla, Texture o None).
