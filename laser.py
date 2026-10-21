@@ -5,6 +5,7 @@ amb l'eix y cap amunt, vistes des de la cara que queda amunt a la màquina.
 """
 from __future__ import annotations
 
+import copy
 import io
 import math
 import zipfile
@@ -41,6 +42,8 @@ class Part:
     # z0 i z1 en coordenades locals, i la matriu el porta a 3D. Només és vàlida abans de
     # transformar la peça per col·locar-la a la planxa (vegeu `placed`).
     pose: tuple | None = None
+    # Gir fix (graus) respecte l'eix de la planxa, per orientar l'ona del cartró; None = lliure.
+    turn: float | None = None
 
     def outline(self):
         return self.shape
@@ -187,17 +190,26 @@ class LaserResult:
     notes: list[str] = field(default_factory=list)   # llistes (tiges…) per a qui munta
     groups: list[list[Part]] = field(default_factory=list)
     extra: dict = field(default_factory=dict)
+    # Material de cada planxa (paral·lel a `sheets`); buit = un sol material, sense carpetes.
+    sheet_materials: list[str] = field(default_factory=list)
 
     def zip_bytes(self, prefix: str) -> bytes:
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            count: dict[str, int] = {}
             for i, svg in enumerate(self.sheets, 1):
-                z.writestr(f"{prefix}_planxa{i:02d}.svg", svg)
+                if self.sheet_materials:
+                    mat = self.sheet_materials[i - 1]
+                    count[mat] = count.get(mat, 0) + 1
+                    z.writestr(f"{mat}/{prefix}_{mat}_planxa{count[mat]:02d}.svg", svg)
+                else:
+                    z.writestr(f"{prefix}_planxa{i:02d}.svg", svg)
             if self.notes:
                 z.writestr(f"{prefix}_muntatge.txt", "\n".join(self.notes) + "\n")
         return buf.getvalue()
 
-    def stl_zip(self, prefix: str, bed: tuple[float, float] | None = None) -> tuple[bytes, list[str]]:
+    def stl_zip(self, prefix: str, bed: tuple[float, float] | None = None,
+                keep: set[str] | None = None) -> tuple[bytes, list[str]]:
         """Un STL per peça, estirada al gruix i plana al llit (cantonada a 0,0,0), per a l'slicer.
 
         Torna el ZIP i els noms de les peces que no caben al `bed` (en cap dels dos sentits).
@@ -205,7 +217,12 @@ class LaserResult:
         buf = io.BytesIO()
         big = []
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+            assign = self.extra.get("assign")
             for name, shape, _M, z0, z1 in self.extra["assembly"]:
+                if assign is not None and assign.get(name) is None:
+                    continue   # peça filtrada: no es fa
+                if keep is not None and name not in keep:
+                    continue
                 m = solid(shape, np.eye(4), 0.0, z1 - z0)
                 if m is None:
                     continue
@@ -213,7 +230,8 @@ class LaserResult:
                 w, h = m.extents[:2]
                 if bed and not (w <= bed[0] and h <= bed[1] or w <= bed[1] and h <= bed[0]):
                     big.append(name)
-                z.writestr(f"{prefix}_{name}.stl", m.export(file_type="stl"))
+                folder = f"{assign[name]}/" if assign is not None else ""
+                z.writestr(f"{folder}{prefix}_{name}.stl", m.export(file_type="stl"))
         return buf.getvalue(), big
 
 
@@ -226,3 +244,43 @@ def nest(parts: list[Part], sheet: tuple[float, float], title: str, images: dict
     svgs = [sheet_svg(pg.pieces, sheet, i, len(pages), title, images)
             for i, pg in enumerate(pages, 1)]
     return svgs, [pg.pieces for pg in pages], oversize
+
+
+def regroup(res: LaserResult, assign: dict[str, str | None], sheet: tuple[float, float]) -> None:
+    """Torna a col·locar les peces d'un resultat amb un material assignat a cada peça.
+
+    `assign`: nom de peça → material (None = filtrada, no es fa). Les planxes surten agrupades
+    per material, en l'ordre en què apareix cada material. Cal que `res.extra` tingui `parts0`
+    (les peces abans de passar a la planxa) i `title`.
+    """
+    mats = list(dict.fromkeys(m for m in assign.values() if m is not None))
+    svgs, groups, sheet_mats, over = [], [], [], 0
+    for mat in mats:
+        ps = [copy.deepcopy(p) for p in res.extra["parts0"] if assign.get(p.name) == mat]
+        s, g, o = nest(ps, sheet, f"{res.extra['title']} · {mat}")
+        svgs += s
+        groups += g
+        sheet_mats += [mat] * len(s)
+        over += o
+    res.sheets, res.groups, res.sheet_materials = svgs, groups, sheet_mats
+    res.extra["assign"] = assign
+    res.stats["planxes"], res.stats["massa_grans"] = len(svgs), over
+
+
+def cnc_zip(res: LaserResult, prefix: str, keep: set[str], sheet: tuple[float, float]) -> tuple[bytes, int]:
+    """ZIP d'SVG només amb les peces de `keep` (la resta va a la impressora 3D).
+
+    Les tires de paper, si n'hi ha, hi van sempre. Torna el ZIP i quantes peces no caben.
+    """
+    ps = [copy.deepcopy(p) for p in res.extra["parts0"] if p.name in keep]
+    svgs, over = [], 0
+    if ps:
+        svgs, _, over = nest(ps, sheet, f"{res.extra['title']} · CNC", res.extra.get("images"))
+    svgs += res.extra.get("paper_sheets", [])
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for i, svg in enumerate(svgs, 1):
+            z.writestr(f"{prefix}_planxa{i:02d}.svg", svg)
+        if res.notes:
+            z.writestr(f"{prefix}_muntatge.txt", "\n".join(res.notes) + "\n")
+    return buf.getvalue(), over

@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import copy
 import math
 
 import numpy as np
@@ -348,7 +349,8 @@ ALIGNS = ("columnes", "costella")
 
 def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickness: float = 3.0,
                 column_d: float = 5.0, sheet=(600.0, 400.0), wall: float = 0.0,
-                align: str = "columnes", lamp: dict | None = None) -> LaserResult:
+                align: str = "columnes", lamp: dict | None = None,
+                rotation: float | None = None) -> LaserResult:
     """Capes per apilar. Amb `wall` > 0 es buiden deixant una paret d'aquest gruix (mm).
 
     `align`: "columnes" (tiges passants) o "costella" (només capes buidades: una costella
@@ -359,6 +361,11 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
     "slot" (amplada d'un canal per lliscar-hi el suport, 0 = cap), "angle" (graus, direcció del
     canal)}. S'obre a la secció de les capes que cobreix; amb capes buidades la paret les
     rodeja sola, i els suports de columnes i costelles s'hi adapten.
+
+    `rotation`: None = les peces es giren lliurement per aprofitar la planxa. Un nombre = la
+    capa k es talla girada k·rotation graus respecte de l'ona del cartró (eix X de la planxa):
+    0 = totes alineades, 90 = ones creuades capa sí capa no. En apilar, les fletxes
+    gravades es posen cap al mateix costat i l'ona queda així creuada.
     """
     m = pc.scale_to(pc.simplify(pc.clean(mesh), target_faces), size_mm)
     z0, z1 = m.bounds[0][2], m.bounds[1][2]
@@ -416,6 +423,8 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
                 one += 1
             shape = g.difference(unary_union(mine)) if mine else g
             part = Part(name, shape)
+            if rotation is not None:
+                part.turn = (k * rotation) % 180   # l'ona del cartró és la mateixa a 180°
             part.pose = pose([1.0, 0, 0], [0, 1.0, 0], [0, 0, 1.0], [0, 0, z0 + k * thickness],
                              0.0, thickness)
             # Contorn continu: on va la capa de sobre. En ratlles: on és la de sota (útil
@@ -435,6 +444,7 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
     parts += ribs
     assembly = placed(parts)
     title = f"Laminació · capes de {thickness:g} mm"
+    parts0 = copy.deepcopy(parts)   # per tornar-les a col·locar amb materials (laser.regroup)
     svgs, groups, oversize = nest(parts, sheet, title)
     notes = [f"{K} capes de {thickness:g} mm ({len(parts)} peces). Munta de L1 (a baix) cap amunt,",
              *([f"Portalàmpades: pas de Ø{lamp['d']:g} mm"
@@ -463,7 +473,7 @@ def make_layers(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickn
                  massa_grans=oversize)
     res = LaserResult(svgs, parts, stats, notes, groups)
     # Per a la vista del muntatge: peces al seu lloc i tiges (x, y, z de baix, z de dalt, Ø).
-    res.extra = dict(assembly=assembly, mesh=m,
+    res.extra = dict(assembly=assembly, mesh=m, parts0=parts0, title=title,
                      columns=[(x, y, z0 + a * thickness, z0 + (b + 1) * thickness, column_d)
                               for x, y, a, b in columns])
     return res

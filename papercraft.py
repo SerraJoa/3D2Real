@@ -72,11 +72,15 @@ UPS = {"+Z": [0, 0, 1], "+Y": [0, 1, 0], "-Y": [0, -1, 0], "+X": [1, 0, 0], "-X"
        "-Z": [0, 0, -1]}
 
 
-def orientation_matrix(up: str = "+Z", turn: float = 0.0) -> np.ndarray:
-    """Matriu 4×4 que posa l'eix `up` del fitxer amunt (+Z) i després gira `turn` graus al
-    voltant de la vertical. Els GLB/glTF es desen amb la Y amunt ("+Y")."""
+def orientation_matrix(up: str = "+Z", turn: float = 0.0, tilt_x: float = 0.0,
+                       tilt_y: float = 0.0) -> np.ndarray:
+    """Matriu 4×4 que posa l'eix `up` del fitxer amunt (+Z), l'inclina `tilt_x` / `tilt_y`
+    graus al voltant de X / Y i després gira `turn` graus al voltant de la vertical. Els
+    GLB/glTF es desen amb la Y amunt ("+Y")."""
+    rot = trimesh.transformations.rotation_matrix
     M = trimesh.geometry.align_vectors(np.array(UPS[up], float), np.array([0.0, 0, 1]))
-    return trimesh.transformations.rotation_matrix(math.radians(turn), [0, 0, 1]) @ M
+    tilt = rot(math.radians(tilt_y), [0, 1, 0]) @ rot(math.radians(tilt_x), [1, 0, 0])
+    return rot(math.radians(turn), [0, 0, 1]) @ tilt @ M
 
 
 def clean(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
@@ -1210,18 +1214,23 @@ def layout(pieces: list[Piece], page: tuple[float, float], margin: float = MARGI
     cache: dict[bytes, list] = {}
     for p in order:
         outline = piece_outline(p)
-        shape_key = shapely.to_wkb(shapely.set_precision(outline, 1e-3))
+        fixed = getattr(p, "turn", None)
+        shape_key = shapely.to_wkb(shapely.set_precision(outline, 1e-3)) + repr(fixed).encode()
         options = cache.get(shape_key)
         if options is None:
             base = outline.buffer(gap / 2)
             pts = p.points()
-            fit = _fit_angle(pts, W, H)
-            angles = [] if fit is None else [fit, fit + math.pi / 2]
-            small = outline.area < NEST_SMALL * W * H
-            for ang, _, _ in _rotations(pts)[:1 if small else 2]:
-                angles += [ang + k * math.pi / 2 for k in range(4)]
-            if not small:  # les peces grans i ramificades encaixen millor amb més girs
-                angles += [k * 2 * math.pi / turns for k in range(turns)]
+            if fixed is not None:  # direcció de l'ona fixada: només el gir demanat (i el seu oposat)
+                a0 = math.radians(fixed)
+                angles = [a0, a0 + math.pi]
+            else:
+                fit = _fit_angle(pts, W, H)
+                angles = [] if fit is None else [fit, fit + math.pi / 2]
+                small = outline.area < NEST_SMALL * W * H
+                for ang, _, _ in _rotations(pts)[:1 if small else 2]:
+                    angles += [ang + k * math.pi / 2 for k in range(4)]
+                if not small:  # les peces grans i ramificades encaixen millor amb més girs
+                    angles += [k * 2 * math.pi / turns for k in range(turns)]
             options = []
             for ang in angles:
                 geom = affinity.rotate(base, ang, origin=(0, 0), use_radians=True)

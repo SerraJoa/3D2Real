@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import copy
 import math
 from dataclasses import dataclass
 
@@ -1361,11 +1362,14 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
             part.transform(lambda x: x * np.array([-1.0, 1.0]))
 
     title = f"Cares · gruix {thickness:g} mm"
+    parts0 = copy.deepcopy(parts)   # per tornar-les a col·locar per sortida (laser.cnc_zip)
     svgs, groups, oversize = nest(parts, sheet, title, images)
+    paper_sheets: list[str] = []
     paper_flat = [(p.name, p.shape, [e.copy() for e in p.engraves]) for p in paper_parts]  # abans de col·locar-les
     if paper_parts:  # el paper va a part: no es talla a la mateixa planxa que el material
         psvg, pgroups, pover = nest(paper_parts, sheet, f"Paper difusor · enganxar per dins ({paper_margin:g} mm de marge)")
         svgs, groups, oversize = svgs + psvg, groups + pgroups, oversize + pover
+        paper_sheets = psvg
     groups_ = len({find(k) for k in plates})
     stats = dict(plaques=len(plates), fusionades=merged_small, suports=brackets, costelles=len(ribs), ranures=slots,
                  arestes=len(seams),
@@ -1401,7 +1405,8 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
     res = LaserResult(svgs, parts, stats, notes, groups)
     res.paper = paper_flat
     # Per a vistes i diagnosi: a quina placa va cada cara i a quin grup de plaques unides.
-    res.extra = dict(mesh=m, plate_of=plate_of, assembly=assembly,
+    res.extra = dict(mesh=m, plate_of=plate_of, assembly=assembly, parts0=parts0, title=title,
+                     images=images, paper_sheets=paper_sheets,
                      group={k: find(k) for k in range(n_plates)},
                      supports={k: sum(1 for fp in footprints[k]) for k in range(n_plates)})
     return res
