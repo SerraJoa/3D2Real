@@ -158,25 +158,28 @@ def test_pestanya_que_topa_poc_amb_una_altra_s_encongeix():
     assert not p.shapes.hits(Polygon(fit.polys[0]))
 
 
-def test_pestanyes_que_es_tapen_es_denten_com_un_engranatge():
-    # Una altra pestanya, enganxada a y=-6, que puja i tapa tota la nova.
+def test_pestanyes_que_es_tapen_es_reparteixen_amb_una_diagonal():
+    # Una pestanya veïna, amb la base a l'aresta vertical que surt del vèrtex A, tapa mitja nova.
+    p, (A, B, C) = _peca_amb_pestanya([(0, 0), (5, -1), (5, -8), (0, -8)], [(0, 0), (0, -8)])
+    fit = pc.fit_tab(p, 0, A, B, C, 5.0, clip=False)
+    assert fit.how == "diagonal"
+    assert len(fit.polys) == 1                       # una sola peça, sense dents
+    theirs = Polygon(list(fit.reshape.values())[0][0])
+    mine = Polygon(fit.polys[0])
+    assert mine.intersection(theirs).area < 1e-6
+    assert mine.distance(LineString([A, B])) < 1e-6
+    assert theirs.distance(LineString([(0, 0), (0, -8)])) < 1e-6
+    assert theirs.area >= pc.TAB_MIN * 5 * 8 * 0.4 and mine.area >= pc.TAB_MIN * 25 * 0.4
+
+
+def test_diagonal_entre_bases_separades_es_la_mediatriu():
     p, (A, B, C) = _peca_amb_pestanya([(-1, -6), (11, -6), (11, -0.5), (-1, -0.5)],
                                       [(-1, -6), (11, -6)])
     fit = pc.fit_tab(p, 0, A, B, C, 5.0, clip=False)
-    assert fit.how == "dentada"
-    assert len(fit.polys) >= 2                      # diverses dents
-    other = list(fit.reshape.values())[0]
-    assert len(other) == 1                          # la tapada queda en forma de pinta
-    mine = [Polygon(q) for q in fit.polys]
-    theirs = Polygon(other[0])
-    assert all(m.intersection(theirs).area < 1e-6 for m in mine)
-    base_new, base_old = LineString([A, B]), LineString([(-1, -6), (11, -6)])
-    assert all(m.distance(base_new) < 1e-6 for m in mine)
-    assert theirs.distance(base_old) < 1e-6
-    assert theirs.area >= pc.TAB_MIN * 12 * 5.5
-    # Les dents s'alternen: la pinta ocupa els forats entre dents.
-    ys = sorted(q[:, 0].mean() for q in fit.polys)
-    assert ys[0] < ys[-1]
+    assert fit.how == "diagonal"
+    mine, theirs = Polygon(fit.polys[0]), Polygon(list(fit.reshape.values())[0][0])
+    assert mine.intersection(theirs).area < 1e-6
+    assert mine.centroid.y > theirs.centroid.y
 
 
 def test_si_no_es_poden_dentar_canvia_de_costat():
@@ -200,7 +203,7 @@ def test_pestanya_que_topa_amb_una_cara_no_s_encongeix_sino_que_es_retalla():
 def test_estadistiques_de_pestanyes(result):
     _, r = result
     s = r.stats
-    assert (s["pestanyes_encongides"] + s["pestanyes_dentades"]
+    assert (s["pestanyes_encongides"] + s["pestanyes_diagonals"]
             + s["pestanyes_retallades"]) <= s["pestanyes"]
     assert s["pestanyes_canviades"] <= s["pestanyes"]
 

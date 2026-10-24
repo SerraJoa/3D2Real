@@ -808,22 +808,18 @@ TAB_GAP = 0.4    # mm de separació entre una pestanya retallada i la cara que l
 TAB_MIN = 0.35   # fracció mínima de l'àrea d'una pestanya sencera perquè valgui la pena
 
 # Quan una pestanya només topa amb altres pestanyes: si el solapament és com a molt
-# aquesta fracció de la seva àrea, s'encongeix; si és més gran, es denten totes dues
-# com un engranatge.
+# aquesta fracció de la seva àrea, s'encongeix; si és més gran, es reparteix amb una diagonal.
 TAB_SHRINK_MAX = 0.35
 # Encongiments que es proven: (fracció de l'alçada, fracció de l'aresta per a cada extrem).
 TAB_SHRINKS = ((0.85, None), (0.7, 0.35), (0.85, 0.4), (0.55, 0.4))
-# Amplada mínima d'una dent (mm) quan es denten dues pestanyes que es tapen; si hi cap,
-# cada dent fa mitja alçada de pestanya.
-TOOTH_MIN = 2.0
 
 
 @dataclass
 class TabFit:
     polys: list[np.ndarray]
     frac: float                                   # àrea respecte de la pestanya sencera
-    how: str                                      # sencera / encongida / dentada / retallada
-    reshape: dict[int, list[np.ndarray]] = field(default_factory=dict)  # altres pestanyes dentades
+    how: str                                      # sencera / encongida / diagonal / retallada
+    reshape: dict[int, list[np.ndarray]] = field(default_factory=dict)  # altres pestanyes tallades
 
 
 def _parts(geom) -> list[Polygon]:
@@ -845,27 +841,46 @@ def _coords(polys: list[Polygon]) -> list[np.ndarray]:
     return [np.array(g.simplify(0.02).exterior.coords[:-1]) for g in polys]
 
 
-def _teeth(p: Piece, own: int, A, B, full: Polygon, hit: list[int], h: float) -> TabFit | None:
-    """Denta la pestanya nova i les que tapa, alternant dents com un engranatge.
+def _semiplans(base_a: np.ndarray, base_b: np.ndarray, t: "Tab"):
+    """Divideix amb una diagonal la zona on dues pestanyes es tapen.
 
-    Les franges parells (perpendiculars a AB) són per a la pestanya nova; on no hi ha
-    cap altra pestanya la nova es queda sencera. Les pestanyes tapades perden el que
-    ocupen les dents noves (amb una mica de joc) i es queden les franges senars.
-    """
-    L = float(np.linalg.norm(B - A))
-    u = (B - A) / L
-    n = np.array([-u[1], u[0]])
-    w = max(TOOTH_MIN, min(h / 2, L / 4))
-    big = 3 * h + L
-    even = []
-    for k in range(0, int(math.ceil(L / w)) + 1, 2):
-        x0, x1 = k * w + TAB_GAP / 2, (k + 1) * w - TAB_GAP / 2
-        even.append(Polygon([A + u * x0 - n * big, A + u * x1 - n * big,
-                             A + u * x1 + n * big, A + u * x0 + n * big]))
+    Retorna (punt de la recta, direcció, costat de la pestanya nova) o None. Si les dues
+    bases es toquen en un vèrtex, la recta és la bisectriu de l'angle que formen; si no, la
+    mediatriu del segment que uneix els seus punts més propers."""
+    from shapely.ops import nearest_points
+    o, q = LineString([base_a, base_b]), LineString([t.A, t.B])
+    p1, p2 = (np.array(c.coords[0]) for c in nearest_points(o, q))
+    if np.linalg.norm(p1 - p2) < 1e-6:
+        far = lambda S, T: max((S, T), key=lambda e: np.linalg.norm(e - p1))
+        du, dt = far(base_a, base_b) - p1, far(t.A, t.B) - p1
+        du, dt = du / np.linalg.norm(du), dt / np.linalg.norm(dt)
+        d = du + dt
+        if np.linalg.norm(d) < 1e-6:
+            return None
+        d = d / np.linalg.norm(d)
+        side = np.array([-d[1], d[0]])
+        if side @ du < 0:
+            side = -side
+        return p1, d, side
+    side = (p1 - p2) / np.linalg.norm(p1 - p2)       # cap a la pestanya nova
+    return (p1 + p2) / 2, np.array([-side[1], side[0]]), side
+
+
+def _diagonal(p: Piece, own: int, A, B, full: Polygon, hit: list[int], h: float) -> TabFit | None:
+    """Reparteix amb una diagonal el que tapen la pestanya nova i les que ja hi eren."""
+    big = 4 * h + float(np.linalg.norm(B - A)) + 10
     others = [p.tab_of[i] for i in hit]
-    occupied = unary_union([t.geom() for t in others])
-    mine = unary_union([full.intersection(unary_union(even)),
-                        full.difference(occupied.buffer(TAB_GAP))])
+    mine = full
+    cuts = []
+    for t in others:
+        sp = _semiplans(A, B, t)
+        if sp is None:
+            return None
+        q0, d, side = sp
+        half = lambda s, q=q0, d=d: Polygon([q - d * big + s * TAB_GAP / 2, q + d * big + s * TAB_GAP / 2,
+                                            q + d * big + s * big, q - d * big + s * big])
+        mine = mine.intersection(half(side))
+        cuts.append((t, half(-side)))
     mine = _attached(mine, A, B, TAB_GAP / 2)
     area = sum(g.area for g in mine)
     if area < TAB_MIN * full.area:
@@ -878,12 +893,13 @@ def _teeth(p: Piece, own: int, A, B, full: Polygon, hit: list[int], h: float) ->
         if mine_geom.intersection(q).area > OVERLAP_TOL * q.area + 1e-9:
             return None
     reshape = {}
-    for t in others:
-        rest = _attached(t.geom().difference(mine_geom.buffer(TAB_GAP)), t.A, t.B, TAB_GAP / 2)
+    for t, region in cuts:
+        rest = _attached(t.geom().intersection(region).difference(mine_geom.buffer(TAB_GAP / 2)),
+                         t.A, t.B, TAB_GAP / 2)
         if sum(g.area for g in rest) < TAB_MIN * t.full_area:
             return None
         reshape[t.shape] = _coords(rest)
-    return TabFit(_coords(mine), area / full.area, "dentada", reshape)
+    return TabFit(_coords(mine), area / full.area, "diagonal", reshape)
 
 
 def fit_tab(p: Piece, fi: int, A, B, C, h: float, clip: bool = True) -> TabFit | None:
@@ -891,7 +907,7 @@ def fit_tab(p: Piece, fi: int, A, B, C, h: float, clip: bool = True) -> TabFit |
 
     - "sencera" si no topa amb res;
     - "encongida" si només topa una mica amb altres pestanyes;
-    - "dentada" si només topa amb altres pestanyes però molt: es denten totes, com un engranatge;
+    - "diagonal" si només topa amb altres pestanyes però molt: es reparteix la zona amb una diagonal;
     - "retallada" (només amb `clip`) si topa amb cares o cap de les anteriors funciona.
     Sense `clip`, retorna None en aquest últim cas perquè qui crida provi l'altre costat.
     """
@@ -910,7 +926,7 @@ def fit_tab(p: Piece, fi: int, A, B, C, h: float, clip: bool = True) -> TabFit |
                 small = Polygon(tab_polygon(A, B, C, h * k, inset))
                 if small.is_valid and not p.shapes.hits(small):
                     return TabFit(_coords([small]), small.area / full.area, "encongida")
-        fit = _teeth(p, own, A, B, full, hit, h)
+        fit = _diagonal(p, own, A, B, full, hit, h)
         if fit is not None:
             return fit
     if not clip:
@@ -1019,7 +1035,7 @@ def add_tabs_and_lines(mesh: trimesh.Trimesh, pieces: list[Piece], owner: np.nda
     numbers = group_seams(mesh, seams)
     stats = dict(costures=len(set(numbers)), arestes_tallades=len(seams),
                  pestanyes=0, sense_pestanya=0, pestanyes_encongides=0,
-                 pestanyes_dentades=0, pestanyes_canviades=0, pestanyes_retallades=0)
+                 pestanyes_diagonals=0, pestanyes_canviades=0, pestanyes_retallades=0)
     # On posar el número: a l'aresta més llarga de cada costura, a cada costat.
     longest: dict[tuple[int, int], tuple[float, int]] = {}
     for i, ((e, a, b), n) in enumerate(zip(seams, numbers)):
@@ -1052,12 +1068,12 @@ def add_tabs_and_lines(mesh: trimesh.Trimesh, pieces: list[Piece], owner: np.nda
         if best is not None:
             tabbed, fit, A, B = best
             if fit.how != "sencera":
-                stats[f"pestanyes_{fit.how[:-1]}es"] += 1
+                stats["pestanyes_diagonals" if fit.how == "diagonal" else f"pestanyes_{fit.how[:-1]}es"] += 1
             if tabbed != sides[0]:
                 stats["pestanyes_canviades"] += 1
             tab_side.setdefault(n, int(patch[tabbed]))
             p = pieces[owner[tabbed]]
-            for idx, polys in fit.reshape.items():  # les pestanyes que s'han dentat amb aquesta
+            for idx, polys in fit.reshape.items():  # les pestanyes que s'han tallat amb aquesta
                 p.tab_of[idx].polys = polys
                 p.shapes.replace(idx, p.tab_of[idx].geom())
             p.add_tab(Tab(A, B, fit.polys, Polygon(tab_polygon(A, B, _edge_in_face(

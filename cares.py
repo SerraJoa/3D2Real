@@ -139,6 +139,24 @@ def _gap_fill(seam: Seam, t: float, s: float, radius: float) -> list[np.ndarray]
     return [A_in, A_out, *corner, B_out, B_in]
 
 
+BLUNT_FRAC = 0.6    # part del vèrtex que sobresurt a l'escletxa que es talla (angles aguts)
+BLUNT_ANGLE = 110.0  # graus: per sota d'aquest angle el vèrtex és una punxa
+
+
+def _blunt(P0: np.ndarray, a: np.ndarray, b: np.ndarray) -> list[np.ndarray]:
+    """Vèrtex P0 entre els punts `a` i `b` (pel contorn: a, P0, b), xamfranat si és una punxa.
+
+    Amb angles molt aguts entre plaques separades, la cantonada interior queda lluny, a
+    l'escletxa: se li talla la punta a `BLUNT_FRAC` del que sobresurt de cada costat."""
+    u, v = a - P0, b - P0
+    lu, lv = np.linalg.norm(u), np.linalg.norm(v)
+    if lu < 1e-6 or lv < 1e-6:
+        return [P0]
+    if math.degrees(math.acos(float(np.clip(u @ v / (lu * lv), -1, 1)))) >= BLUNT_ANGLE:
+        return [P0]
+    return [P0 + u * BLUNT_FRAC, P0 + v * BLUNT_FRAC]
+
+
 def bracket_shape(seam: Seam, t: float, s: float, leg: float,
                   corner: float | None = None) -> Polygon | None:
     """Suport en forma d'estel al pla perpendicular a l'aresta (coordenades de la secció).
@@ -165,7 +183,12 @@ def bracket_shape(seam: Seam, t: float, s: float, leg: float,
         m = -m
     C = P0 + m * leg * KITE_DEPTH
     fill = _gap_fill(seam, t, s, corner) if corner is not None else None
-    tip = [P0] if fill is None else fill  # amb escletxa, la punta l'omple fins a fora
+    if fill is None:
+        uA0, uB0 = P0[0], float((P0 - nb2 * t) @ b2)
+        tip = (_blunt(P0, np.array([s, t]), b2 * s + nb2 * t)
+               if s > uA0 + 1e-3 and s > uB0 + 1e-3 else [P0])
+    else:
+        tip = fill  # amb escletxa, la punta l'omple fins a fora
     poly = Polygon(tip + [B_end, C, A_end])
     if not poly.is_valid or poly.area < 1e-3:
         return None
@@ -284,10 +307,11 @@ def arch_bracket(seam: Seam, t: float, s: float, length: float,
     if fill is not None:  # la punta omple l'escletxa entre plaques fins a fora: es veu
         chain += fill
     else:
-        if s > uA0 + 1e-3:
+        gapA, gapB = s > uA0 + 1e-3, s > uB0 + 1e-3
+        if gapA:
             chain.append(A(s))
-        chain.append(P0)
-        if s > uB0 + 1e-3:
+        chain += _blunt(P0, A(s) if gapA else P0, B(s) if gapB else P0) if gapA and gapB else [P0]
+        if gapB:
             chain.append(B(s))
     for u0, u1 in sorted(tenons_q):
         chain += peg(B, out_b, u0, u1)
@@ -609,6 +633,7 @@ def add_ribs(m, plate_of, plates, normals, to2d, parent: list[int], t: float, so
             part.labels.append((np.array(spot.coords[0]), name, 3.0))
             for k in ks:
                 plates[k].shape = plates[k].shape.difference(slots[k])
+                plates[k].notches.append(slots[k])
                 cuts.setdefault(k, []).append(slots[k])
                 c = np.array(slots[k].centroid.coords[0])
                 plates[k].labels.append((c + np.array([0.0, 4.0]), name, 2.5))
@@ -876,8 +901,13 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                chamfer_mm: float = 0.0, tenon_chamfer: float = 0.0,
                fill_gap: bool = False, merge_small: float = 4.0,
                per_edge: int = 0, grip: bool = True, lamp: dict | None = None,
-               paper: bool = False, paper_margin: float = 5.0) -> LaserResult:
+               paper: bool = False, paper_margin: float = 5.0,
+               max_leg_frac: float = 0.0) -> LaserResult:
     """Plaques i suports per a làser.
+
+    `max_leg_frac`: el braç d'un suport no passa d'aquesta fracció de la fondària de la placa
+    (distància de l'aresta al punt més llunyà de la placa); 0 = sense límit. Si cap braç no hi
+    cap, es queda el més curt. El braç estàndard (`bracket_mm`) s'escurça només quan cal.
 
     `joint`: "encaix" = suports en arc amb tenons que entren en ranures de les plaques (com
     més ferm; els tenons es veuen com a petits rectangles a la cara de fora); "cola" =
@@ -887,8 +917,8 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
     dibuixos a les cares; `texture` és la decor.Texture de la malla original.
 
     `chamfer_mm`: xamfrà a les cantonades convexes del contorn de les plaques (no als forats ni
-    a les ranures), per a l'efecte (sobretot amb llum a dins); també a la punta dels suports
-    quan omple l'escletxa entre plaques separades, que es veu. `tenon_chamfer`: xamfrà a les
+    a les ranures), per a l'efecte (sobretot amb llum a dins); no s'aplica als suports.
+    `tenon_chamfer`: xamfrà a les
     puntes dels tenons de suports i costelles, perquè entrin més fàcilment (0,5–1 mm).
 
     `fill_gap`: amb espai entre cares, la punta de cada suport omple l'escletxa fins a la cara de
@@ -1116,11 +1146,24 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
         # El braç va cap a dins de la placa: la mida la limita la placa, no l'aresta.
         legs = sorted({round(x, 3) for x in legs if x >= 1.5 * thickness}, reverse=True)
 
+        def depth(k: int, seam: Seam) -> float:
+            """Fondària de la placa k des de l'aresta (mm), per limitar la llargada del braç."""
+            if k not in plates:
+                return math.inf
+            e0, e1 = to2d(k, np.array([seam.e0, seam.e1]))
+            d = (e1 - e0) / np.linalg.norm(e1 - e0)
+            pts = np.array(plates[k].shape.exterior.coords) - e0
+            return float(np.abs(pts[:, 0] * d[1] - pts[:, 1] * d[0]).max())
+
         def place(seam: Seam, s: float, options, relaxed: bool = False):
             """Primera opció (braç, nombre de suports) que hi cap: (braç, centres, cossos 3D)."""
             L = float(np.linalg.norm(seam.e1 - seam.e0))
             if L < thickness + 1.0:
                 return None
+            if max_leg_frac > 0:
+                cap = max_leg_frac * min(depth(seam.p, seam), depth(seam.q, seam)) - s
+                lim = max(cap, min(legs))  # el braç estàndard s'escurça només si la placa és petita
+                options = list(dict.fromkeys((min(c, lim), n) for c, n in options))
             d3 = (seam.e1 - seam.e0) / L
             others = None  # plaques en 3D: només si algun suport cap a les plaques (és car)
             envs: dict[float, Polygon | None] = {}
@@ -1186,7 +1229,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
             placed.append([seam, s, count, got, fps, news])
         # 2) Quan ja totes les arestes tenen el seu, les que s'han quedat amb suports petits
         #    proven més suports de mitjans (sense treure lloc a cap altra aresta).
-        for item in placed if upgrade else []:
+        for item in placed if upgrade and not max_leg_frac else []:  # amb límit, el braç curt no es compensa
             seam, s, count, got, fps, news = item
             total = got[0] * len(got[1])
             if total >= 0.75 * bracket_mm * count:
@@ -1245,12 +1288,12 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                 return plans_, groups_of(parent_), fps, rib_data, before
         return first["plans"], groups_of(trial), first["fps"], ([], 0, [], {}, []), before
 
-    saved = {k: (p.shape, list(p.labels)) for k, p in plates.items()}
+    saved = {k: (p.shape, list(p.labels), list(p.notches)) for k, p in plates.items()}
     plans, group, footprints, rib_data, before = final(True)
     if rib_data[0] and len(set(group.values())) >= before:
         # Les costelles no han millorat res (bloquegen més suports dels que estalvien).
-        for k, (shape_, labels_) in saved.items():
-            plates[k].shape, plates[k].labels = shape_, labels_
+        for k, (shape_, labels_, notches_) in saved.items():
+            plates[k].shape, plates[k].labels, plates[k].notches = shape_, labels_, notches_
         plans, group, footprints, rib_data, _ = final(bool(forced), auto=False)
     ribs, rib_slots, rib_planes, rib_cuts, rib_links = rib_data
 
@@ -1291,16 +1334,16 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                         break  # el primer que hi cap
                 keep[k] = ok
             shape = arch_bracket(seam, thickness, s, leg, keep[seam.p], keep[seam.q],
-                                 tip=tenon_chamfer, corner=chamfer_mm if fill_gap else None)
+                                 tip=tenon_chamfer, corner=0.0 if fill_gap else None)
             if shape is None and not cut:  # sense tenons enganxats: banda en V, no estel
-                shape = arch_bracket(seam, thickness, s, leg, [], [], corner=chamfer_mm if fill_gap else None)
+                shape = arch_bracket(seam, thickness, s, leg, [], [], corner=0.0 if fill_gap else None)
             if shape is not None and rib_planes and any(laps(c, seam, shape, rib_planes) is None
                                                         for c in centers):
                 shape = None  # l'arc no pot encaixar amb una costella: estel enganxat
             if shape is None:
                 cut = {}
         if shape is None and L > thickness:  # estel enganxat: també és el pla B de l'encaix
-            shape = bracket_shape(seam, thickness, s, leg, corner=chamfer_mm if fill_gap else None)
+            shape = bracket_shape(seam, thickness, s, leg, corner=0.0 if fill_gap else None)
         if shape is not None:
             shape = hollow(shape, thickness)
 
@@ -1316,6 +1359,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
             part.labels.append((pos, f"a{seam.number}", 3.0))
             if k in cut:
                 part.shape = part.shape.difference(unary_union(cut[k]))
+                part.notches += cut[k]
                 slots += len(cut[k])
             if shape is None:
                 continue
@@ -1348,7 +1392,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
     parts += ribs
     paper_parts = paper_strips(seams, thickness, gap, paper_margin, drawn, chamfer_mm) if paper else []
     for part in plates.values():  # abans de decorar: el marc de la decoració segueix el xamfrà
-        part.shape = chamfer(part.shape, chamfer_mm)
+        part.shape = chamfer(part.shape, chamfer_mm, avoid=unary_union(part.notches) if part.notches else None)
 
     images, face_up, decor_holes = decorate_plates(m, plates, to2d, footprints, decor, texture)
 

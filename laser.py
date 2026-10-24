@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 import shapely
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import MultiPolygon, Point, Polygon
 
 import papercraft as pc
 
@@ -35,6 +35,7 @@ class Part:
     shape: Polygon | MultiPolygon
     engraves: list[np.ndarray] = field(default_factory=list)          # polilínies
     labels: list[tuple[np.ndarray, str, float]] = field(default_factory=list)
+    notches: list = field(default_factory=list)                       # ranures tallades (no s'hi fa xamfrà)
     decor: list = field(default_factory=list)                         # decor.DecorOp (gravat)
     guides: list[np.ndarray] = field(default_factory=list)            # referència (verd)
     guide_labels: list[tuple[np.ndarray, str, float]] = field(default_factory=list)
@@ -68,13 +69,18 @@ class Part:
         self.engraves, self.labels = [], []
 
 
-def chamfer(shape, d: float, min_turn: float = 10.0):
+def chamfer(shape, d: float, min_turn: float = 10.0, avoid=None):
     """Xamfrà de `d` mm a les cantonades convexes del contorn exterior (no als forats ni a les
     cantonades entrants, que han d'encaixar). Cada costat es retalla com a molt un 40 % per
     banda, perquè dos xamfrans veïns no es trepitgin; els girs de menys de `min_turn` graus no
-    són cantonades."""
+    són cantonades. Les cantonades sobre `avoid` (p. ex. la boca de les ranures) no es toquen."""
     if d <= 0:
         return shape
+    if avoid is not None and not avoid.is_empty:
+        avoid = avoid.buffer(0.01)
+        shapely.prepare(avoid)
+    else:
+        avoid = None
     out = []
     for g in getattr(shape, "geoms", [shape]):
         if g.geom_type != "Polygon" or g.is_empty:
@@ -94,7 +100,7 @@ def chamfer(shape, d: float, min_turn: float = 10.0):
                 continue
             cross = (p - a)[0] * (b - p)[1] - (p - a)[1] * (b - p)[0]
             turn = math.degrees(math.acos(np.clip((p - a) @ (b - p) / (lu * lv), -1, 1)))
-            if (cross > 0) != ccw or turn < min_turn:  # entrant o gairebé recte
+            if (cross > 0) != ccw or turn < min_turn or (avoid is not None and avoid.contains(Point(p))):
                 pts.append(p)
                 continue
             k = min(d, 0.4 * lu, 0.4 * lv)

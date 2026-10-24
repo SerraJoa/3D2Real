@@ -150,11 +150,11 @@ def test_xamfra_de_plaques_i_de_tenons():
             assert p.shape.area == pytest.approx(sense[p.name].area)
     assert overlaps(visor.cares_solids(tenons)) == []
     # Amb espai entre cares, la punta del suport omple l'escletxa fins a la cara de fora (es
-    # veu), arrodonida amb el radi del xamfrà de les plaques, i no surt del model.
+    # veu), amb cantonada viva (el xamfrà de les plaques no s'aplica als suports), i no surt del model.
     viu = cares.make_faces(m, 200, 80, 3.0, gap=4.0, fill_gap=True)
     rodo = cares.make_faces(m, 200, 80, 3.0, gap=4.0, fill_gap=True, chamfer_mm=2.0)
     a = {p.name: p.shape for p in viu.parts}
-    assert all(p.shape.area < a[p.name].area for p in rodo.parts if p.name.startswith("S"))
+    assert all(p.shape.area == pytest.approx(a[p.name].area) for p in rodo.parts if p.name.startswith("S"))
     lo, hi = rodo.extra["mesh"].bounds
     for s in visor.cares_solids(rodo):
         assert np.all(s.mesh.bounds[0] >= lo - 1e-6) and np.all(s.mesh.bounds[1] <= hi + 1e-6)
