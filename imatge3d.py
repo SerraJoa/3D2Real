@@ -346,8 +346,18 @@ def pell_projectada(mesh: trimesh.Trimesh, imatge: bytes, detalls=None) -> trime
     return out
 
 
+def mascara_per_diferencia(imatge: bytes, sense: bytes, mida: int = 1024, dif: float = 40.0) -> np.ndarray:
+    """Màscara (mida × mida) dels detalls fins: on el dibuix original difereix de la versió sense detalls
+    (`sense_detalls`). Una mica dilatada perquè les cares de la vora del detall també hi entrin."""
+    a = np.asarray(Image.open(io.BytesIO(prepara_imatge(imatge, mida))).convert("RGB"), float)
+    b = np.asarray(Image.open(io.BytesIO(prepara_imatge(sense, mida))).convert("RGB").resize(a.shape[1::-1]), float)
+    m = np.abs(a - b).max(-1) > dif
+    return ndi.binary_dilation(ndi.binary_opening(m, iterations=1), iterations=3)
+
+
 def pell_per_cares(mesh: trimesh.Trimesh, imatge: bytes, camera=None, cel: int | None = None,
-                   detalls=None, mida: int = 1024) -> trimesh.Trimesh:
+                   detalls=None, mida: int = 1024, mascara: np.ndarray | None = None,
+                   nomes_detalls: bool = False) -> trimesh.Trimesh:
     """Textura per cara a partir del dibuix original. Cada cara objectiu té la seva cel·la a l'atles:
     el seu perímetre es projecta sobre el dibuix (càmera encaixada per silueta), es retalla i la imatge
     es deforma perquè cobreixi la cara (cada texel agafa el píxel on cau el seu punt 3D). Les cares
@@ -355,6 +365,9 @@ def pell_per_cares(mesh: trimesh.Trimesh, imatge: bytes, camera=None, cel: int |
     altra cara tapa el punt, o la cara mira d'esquena, queda el color mitjà de l'objecte.
     `camera`: (R, c, s, tx, ty) de `camera_imatge` (p. ex. la de la malla densa; si no, s'ajusta amb
     `mesh`). `detalls`: capses d'un VL; amb elles només es mantenen aquests detalls sobre blanc.
+    `mascara` (mida × mida, p. ex. `mascara_per_diferencia`) fa de `detalls`. Amb `nomes_detalls` només les
+    cares que veuen un detall tenen cel·la (i imatge); la resta apunten a un únic texel de color mitjà,
+    de manera que l'atles és petit i la resta del model no porta UV pròpia.
     Torna la malla sense vèrtexs compartits (UV per cantonada)."""
     from scipy import ndimage
 
@@ -375,20 +388,20 @@ def pell_per_cares(mesh: trimesh.Trimesh, imatge: bytes, camera=None, cel: int |
 
     neutre = np.array(np.median(np.asarray(img)[mask], 0), float)
     arr = np.asarray(img, float)
-    if detalls is not None:
+    det = mascara if mascara is not None else (mascara_detalls(img, detalls) if detalls is not None else None)
+    if det is not None and not nomes_detalls:
         neutre = np.array([255.0, 255.0, 255.0])
-        arr = np.where(mascara_detalls(img, detalls)[..., None], arr, neutre)
+        arr = np.where(det[..., None], arr, neutre)
+    det_f = det.astype(float) if det is not None else None
 
     dins = ndimage.binary_erosion(mask, iterations=2).astype(float)
-    cols = int(np.ceil(np.sqrt(n)))
-    k = cel or max(8, min(48, 4096 // cols))
-    S = cols * k
+    cols0 = int(np.ceil(np.sqrt(n)))
+    k = cel or (32 if nomes_detalls else max(8, min(48, 4096 // cols0)))
     t = (np.arange(k) + 0.5) / k
     A, B = np.meshgrid(t, t, indexing="ij")                     # A al llarg de v0→v1, B de v0→v2
     fold = A + B > 1                                            # mig quadrat és fora del triangle: es plega a l'aresta
     A, B = np.where(fold, 1 - B, A), np.where(fold, 1 - A, B)
-    atles = np.empty((S, S, 3))
-    atles[:] = neutre
+    cells = {}                                                  # cara -> cel·la (k, k, 3) en (A, B)
     for f0 in range(0, n, 256):                                 # per tongades: la memòria no depèn de n
         fs = np.arange(f0, min(f0 + 256, n))
         T = mesh.vertices[F[fs]]                                # (m, 3, 3)
@@ -404,17 +417,30 @@ def pell_per_cares(mesh: trimesh.Trimesh, imatge: bytes, camera=None, cel: int |
                 vist |= ids[yy, xx] == (fs + 1)[:, None, None]
         vist &= davant[fs][:, None, None]
         vist &= ndimage.map_coordinates(dins, [v, u], order=0, mode="constant") > 0.5   # el fons no és pell
+        if nomes_detalls and det_f is not None:
+            vist &= ndimage.map_coordinates(det_f, [v, u], order=0, mode="constant") > 0.5
         col = np.stack([ndimage.map_coordinates(arr[..., q], [v, u], order=1, mode="nearest")
                         for q in range(3)], -1)
         col = np.where(vist[..., None], col, neutre)
         for i, f in enumerate(fs):
-            ci, cj = f % cols, f // cols
-            atles[cj * k:(cj + 1) * k, ci * k:(ci + 1) * k] = col[i].transpose(1, 0, 2)   # (B, A) → files, columnes
-    ci, cj = np.arange(n) % cols, np.arange(n) // cols
+            if not nomes_detalls or vist[i].any():
+                cells[f] = col[i]
+    # cel·la 0 = color mitjà (cares sense detall); les altres, una per cara amb imatge
+    cols = int(np.ceil(np.sqrt(len(cells) + 1)))
+    S = cols * k
+    atles = np.empty((S, S, 3))
+    atles[:] = neutre
+    idx = np.zeros(n, int)
+    for j, (f, col) in enumerate(cells.items(), 1):
+        idx[f] = j
+        atles[(j // cols) * k:(j // cols + 1) * k, (j % cols) * k:(j % cols + 1) * k] = col.transpose(1, 0, 2)   # (B, A) → files, columnes
+    ci, cj = idx % cols, idx // cols
     pad = 0.5
     cant = np.array([[0, 0], [1, 0], [0, 1]], float)           # (A, B) de cada cantonada
     uv = np.stack([(ci[:, None] * k + pad + cant[None, :, 0] * (k - 2 * pad)) / S,
                    1 - (cj[:, None] * k + pad + cant[None, :, 1] * (k - 2 * pad)) / S], -1)
+    if nomes_detalls:                                           # sense detall: tota la cara al mateix texel neutre
+        uv[idx == 0] = ((k / 2) / S, 1 - (k / 2) / S)
     out = trimesh.Trimesh(mesh.vertices[F].reshape(-1, 3), np.arange(n * 3).reshape(-1, 3), process=False)
     out.visual = trimesh.visual.TextureVisuals(uv=uv.reshape(-1, 2),
                                                image=Image.fromarray(atles.clip(0, 255).astype(np.uint8)))

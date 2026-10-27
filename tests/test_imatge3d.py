@@ -135,3 +135,18 @@ def test_pell_per_cares_la_cara_d_esquena_i_la_tapada_queden_neutres():
     r = imatge3d.pell_per_cares(m, _imatge_quadrat(), camera=cam, cel=16)
     a = np.asarray(r.visual.material.image, float).reshape(-1, 3)
     assert (a.sum(1) < 200).sum() == 0                       # cap píxel fosc: no s'hi ha pintat l'ull
+
+
+def test_pell_per_cares_nomes_detalls_només_les_cares_amb_detall_tenen_imatge():
+    # dues plaques: la de l'esquerra veu l'«ull» del dibuix, la de la dreta només fons del cos
+    V = np.array([[-.5, -.5, 0], [0, -.5, 0], [0, .5, 0], [-.5, .5, 0],
+                  [0, -.5, 0], [.5, -.5, 0], [.5, .5, 0], [0, .5, 0]], float)
+    m = trimesh.Trimesh(V, [[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]], process=False)
+    cam = (np.eye(3), np.zeros(3), 512.0, 512.0, 512.0)
+    mask = np.zeros((1024, 1024), bool)
+    mask[400:620, 400:520] = True                            # al voltant de l'ull (a l'esquerra del centre)
+    r = imatge3d.pell_per_cares(m, _imatge_quadrat(), camera=cam, cel=16, mascara=mask, nomes_detalls=True)
+    uv = r.visual.uv.reshape(-1, 3, 2)
+    propia = np.ptp(uv, axis=1).max(1) > 1e-6
+    assert propia[:2].any() and not propia[2:].any()          # la dreta apunta al texel neutre
+    assert r.visual.material.image.size[0] <= 16 * 3          # atles petit: cel·la neutra + poques cares
