@@ -16,7 +16,7 @@ import papercraft as pc
 import reduccio
 import vista
 import visor
-from ui import carpeta, disseny, encaix, orientacio, pintura, portada, recursos, uv
+from ui import carpeta, cparam, disseny, encaix, orientacio, pintura, portada, recursos, uv
 
 st.set_page_config(page_title="Desplegables", layout="wide", initial_sidebar_state="collapsed")
 with st.sidebar:
@@ -74,6 +74,9 @@ out = portada.sortida_valor(st.session_state["producte"], st.session_state["sort
 plates_out = supports_out = "CNC" if out in ("Làser / CNC", "CNC / làser") else "3D"
 
 ss = st.session_state
+st.markdown("<style>.st-key-ia_caixa, .st-key-ia_caixa_img {background: rgba(124, 92, 214, 0.12); "
+            "border: 1px solid rgba(124, 92, 214, 0.45); border-radius: 10px; padding: 0.8rem 1rem; "
+            "margin: 0.4rem 0 0.8rem;}</style>", unsafe_allow_html=True)
 origen = ss["origen"]
 MODELS = (".stl", ".obj", ".glb", ".gltf")
 if "fitxers" not in ss:   # el model arriba des de la targeta del pas: pàgina pròpia, no l'espai de treball
@@ -92,32 +95,41 @@ if "fitxers" not in ss:   # el model arriba des de la targeta del pas: pàgina p
     else:
         # Imatge → model 3D (Hunyuan3D 2.1 via ComfyUI): la imatge s'accepta i el model surt sol.
         comfy = ss["comfy_url"]
-        carpeta = ss["via"] == "carpeta"
-        portada.capcalera("Carrega la imatge" if carpeta else "Descriu què vols",
-                          "Millor l'objecte sol i sobre fons net." if carpeta else
+        de_carpeta = ss["via"] == "carpeta"
+        portada.capcalera("Carrega la imatge" if de_carpeta else "Descriu què vols",
+                          "Millor l'objecte sol i sobre fons net." if de_carpeta else
                           "Escriu què vols veure i tria l'estil; en genera una imatge.")
         with mig:
-            if carpeta:
+            if de_carpeta:
                 img_up = st.file_uploader("Imatge", type=["png", "jpg", "jpeg", "webp"], key="img3d",
                                           label_visibility="collapsed")
                 if img_up is None:
                     triades = carpeta.tria((".png", ".jpg", ".jpeg", ".webp"), "img3d_carpeta")
                     img_up = triades[0] if triades else None
             else:
-                prompt = st.text_input("Què vols", placeholder="una guineu asseguda", key="img_prompt")
-                estil = st.selectbox("Estil", list(imatge3d.ESTILS), key="img_estil",
-                                     help="Low poly força cares planes i pocs polígons: segmenta i "
-                                          "redueix millor. Normal dóna més detall.")
-                if st.button("Genera la imatge", disabled=not prompt.strip(), use_container_width=True):
-                    try:
-                        with st.spinner("Generant la imatge…"):
-                            png = imatge3d.genera_imatge(prompt.strip(), estil, comfy)
-                        ss["img_generada"] = _Fitxer(prompt.strip()[:30].replace(" ", "_") + ".png", png)
-                    except Exception as e:
-                        st.error(str(e))
+                with st.container(key="ia_caixa_img"):
+                    st.caption("🤖 Amb IA: necessita ComfyUI i una GPU (Hunyuan3D / Z-Image).")
+                    prompt = st.text_input("Què vols", placeholder="una guineu asseguda", key="img_prompt")
+                    estil = st.selectbox("Estil", list(imatge3d.ESTILS), key="img_estil",
+                                         help="Low poly força cares planes i pocs polígons: segmenta i "
+                                              "redueix millor. Normal dóna més detall.")
+                    if st.button("Genera la imatge", disabled=not prompt.strip(), use_container_width=True):
+                        try:
+                            with st.spinner("Generant la imatge…"):
+                                png = imatge3d.genera_imatge(prompt.strip(), estil, comfy)
+                            ss["img_generada"] = _Fitxer(prompt.strip()[:30].replace(" ", "_") + ".png", png)
+                        except Exception as e:
+                            st.error(str(e))
                 img_up = ss.get("img_generada")
             if img_up is not None:
                 st.image(img_up.getvalue(), use_container_width=True)
+                with st.container(key="ia_caixa"):
+                    st.caption("🤖 Amb IA: el model 3D es genera amb ComfyUI i una GPU. Sense GPU, "
+                               "carrega el model (STL, OBJ o GLB) des de l'inici.")
+                    nitida = st.checkbox("Malla nítida (cares planes)", False, key="img_nitida",
+                                         help="Extreu la superfície del camp en brut de Hunyuan, sense "
+                                              "suavitzar: conserva facetes i arestes vives. Cal el node "
+                                              "SaveVoxelNpy (comfy_nodes/) a ComfyUI.")
                 if st.button("Accepta la imatge i continua", type="primary", use_container_width=True):
                     barra = st.progress(0.0, text="Generant el model 3D…")
 
@@ -125,7 +137,8 @@ if "fitxers" not in ss:   # el model arriba des de la targeta del pas: pàgina p
                         barra.progress(0.95 * (1 - math.exp(-t / 150)),
                                        text=f"Generant el model 3D… {int(t)} s (uns minuts)")
                     try:
-                        glb = imatge3d.genera(img_up.getvalue(), comfy, progres=avanca)
+                        glb = (imatge3d.genera_nitida if nitida else imatge3d.genera)(
+                            img_up.getvalue(), comfy, progres=avanca)
                         ss["fitxers"] = {img_up.name.rsplit(".", 1)[0] + "_3d.glb": glb}
                         st.rerun()
                     except RuntimeError as e:
@@ -217,7 +230,7 @@ if models:
         is_gltf = models[0].name.lower().endswith((".glb", ".gltf"))
         sig = (models[0].name, len(models[0].getvalue()))
         if ss.get("orient_sig") != sig:
-            for k in ("orient", "orient_mini", "encaix", "encaix_mini", "encaix_tipus", "uv", "uv_mini", "uv_import", "malla", "malla_mini", "veure", "pantalla", "tecnic", "tecnic_mini", "recursos", "desplegat_html", "vista_tex", "disseny", "disseny_mini"):
+            for k in ("orient", "orient_mini", "encaix", "encaix_mini", "encaix_tipus", "uv", "uv_mini", "uv_import", "malla", "malla_mini", "cmat", "cmat_mini", "ccar", "ccar_mini", "csup", "csup_mini", "veure", "pantalla", "tecnic", "tecnic_mini", "recursos", "desplegat_html", "vista_tex", "disseny", "disseny_mini"):
                 ss.pop(k, None)
             ss["orient_sig"] = sig
         if "orient" not in ss:
@@ -382,6 +395,24 @@ if models:
             resum(f"Tècnic · {r_.stats['pagines']} pàg.", r_.pages[0],
                   [("⬇️ Pàgines (ZIP)", r_.zip_bytes(), "desplegable.zip", "application/zip"), glb_recurs()])
 
+        def recursos_cares(r_) -> list:
+            """Descàrregues de les cares: planxes CNC en ZIP i/o STL de les peces 3D, i el model."""
+            mat_, car_, sup_ = ss["cmat"], ss["ccar"], ss["csup"]
+            po = car_["plates_out"] if out == "Mixta" else plates_out
+            so = sup_["supports_out"] if out == "Mixta" else supports_out
+            noms = {p.name for p in r_.extra["parts0"]}
+            cnc = {n for n in noms if (po if n[0] == "C" else so) == "CNC"}
+            res = []
+            if cnc == noms:
+                res.append(("⬇️ Planxes (SVG + muntatge, ZIP)", r_.zip_bytes("cares"), "cares.zip", "application/zip"))
+            elif cnc:
+                z, _over = laser.cnc_zip(r_, "cares", cnc, mat_["sheet_mm"])
+                res.append(("⬇️ Planxes CNC (SVG + muntatge, ZIP)", z, "cares_cnc.zip", "application/zip"))
+            if cnc != noms:
+                z, _big = r_.stl_zip("cares", sup_["bed"], None if not cnc else noms - cnc)
+                res.append(("⬇️ STL (una peça per fitxer, ZIP)", z, "cares_stl.zip", "application/zip"))
+            return res + [glb_recurs()]
+
         def gen_cares(decor):
             a, kw = ss["gc"]
             with st.spinner("Tallant cares i suports…"):
@@ -390,27 +421,11 @@ if models:
             low = pc.simplify(prepared, 300) if len(prepared.faces) > 300 else prepared
             resum(f"Tècnic · {r_.stats['plaques']} plaques",
                   vista.view_svg(low, ["#dcc29a"] * len(low.faces), width=200, yaw=35, pitch=22),
-                  [glb_recurs()])
+                  recursos_cares(r_))
 
         def fi_disseny(text: str, uri: str) -> None:
             ss["disseny"], ss["disseny_mini"] = True, (text, uri)
             ss["pantalla"] = None
-
-        def botons_disseny():
-            """Les tres opcions de disseny, a la pantalla un cop generat: UV, pintar o en blanc."""
-            paper_on = branch.startswith("📄")
-            b1, b2, b3 = st.columns(3)
-            if b1.button("🗺️ UV", use_container_width=True, help="Posa la pell d'una UV (del model o importada)"):
-                ss["pantalla"] = "uv"
-                st.rerun()
-            if b2.button("🖌️ Pintar", use_container_width=True, help="Imatges i colors per capes"):
-                ss["pantalla"] = "pintar"
-                st.rerun()
-            if b3.button("⬜ En blanc", use_container_width=True, help="Sense disseny"):
-                ss["dis_ops"] = []
-                ss["paper_decor" if paper_on else "cares_decor"] = {}
-                (gen_paper if paper_on else gen_cares)({})
-                st.rerun()
 
         def aplica_capes(laser: bool, sense_uv: bool = False) -> None:
             """Compon totes les capes, regenera i surt de l'apartat Disseny."""
@@ -424,9 +439,9 @@ if models:
             ss["paper_decor" if paper_on else "cares_decor"] = fet
             (gen_paper if paper_on else gen_cares)(fet)
             if ops:   # render amb tot el que s'ha posat: pell i capes
-                d_ = visor.pack(visor.model_solids(prepared, "Texturitzat", "#dcc29a"))
-                rgb = pintura.colors(frames, prepared, textura_prep(), ops)
-                col = np.zeros((3 * len(prepared.faces), 4), np.uint8)
+                fi_, rgb = pintura.render(frames, prepared, textura_prep(), ops, ss.get("dis_marc", 0.0))
+                d_ = visor.pack(visor.model_solids(fi_, "Texturitzat", "#dcc29a", max_faces=200000))
+                col = np.zeros((3 * len(fi_.faces), 4), np.uint8)
                 col[:, :3] = np.repeat(rgb, 3, axis=0)
                 d_["col"] = visor._b64(col, np.uint8)
                 ss["vista_tex"] = d_
@@ -511,16 +526,49 @@ if models:
             st.info("Contínua = tall · ratlles = plec de vall · punt i ratlla = plec de muntanya · "
                     "gris = pestanya · els números vermells iguals s'uneixen.")
 
+        def resultat_cares(r) -> None:
+            s = r.stats
+            st.success("🎉 Felicitats, el projecte s'ha acabat! Aquí tens el muntatge i el render; "
+                       "els fitxers, a Recursos.")
+            st.caption(f"{s['plaques']} plaques · {s['suports']} suports · {s['costelles']} costelles · "
+                       f"{s['mitges_fustes']} mitges fustes · {s['ranures']} ranures · {s['planxes']} planxes")
+            if s["grups_de_plaques"] > 1:
+                st.warning(f"Les plaques queden en {s['grups_de_plaques']} grups sense suport entre ells (a la "
+                           "vista, un color per grup): hi ha plaques massa petites per a suports.")
+            if s["massa_grans"]:
+                st.warning(f"{s['massa_grans']} peces no caben a la planxa.")
+            if ss.pop("celebra", False):
+                st.balloons()
+            tex_ = ss.get("vista_tex")
+            cols = st.columns([3, 3, 2] if tex_ else [3, 2], gap="large")
+            with cols[0]:
+                assembly_view(r, visor.cares_solids, "cares")
+            if tex_:
+                with cols[1]:
+                    st.markdown("**Texturitzat**")
+                    visor.show([], key="visor_tex", data=tex_)
+            with cols[-1]:
+                with st.container(key="recursos_final", border=True):
+                    st.markdown("### 📦 Recursos")
+                    for i, (text, dades, nom, mime) in enumerate(ss.get("recursos", [])):
+                        st.download_button(text, dades, nom, mime, key=f"recf_{i}", use_container_width=True,
+                                           type="primary" if i == 0 else "secondary")
+            st.info("Vermell = tallar · blau = gravar · verd = només referència (plaques amb gravat decoratiu: "
+                    "es tallen amb la cara de fora amunt).")
+            with st.expander("Instruccions de muntatge"):
+                st.text("\n".join(r.notes))
+            show(r.sheets, "Planxa")
+
         # ---- Desplegable ja generat: el Tècnic ha passat al carrusel; queda triar disseny i el resultat
-        if branch.startswith("📄") and ss.get("tecnic"):
-            if ss.get("paper") is None:
+        if (branch.startswith("📄") or cares_on) and ss.get("tecnic"):
+            if ss.get("paper" if branch.startswith("📄") else "cares") is None:
                 ss.pop("tecnic", None)
                 ss.pop("tecnic_mini", None)
                 st.rerun()
             if not ss.get("disseny"):
                 triat = portada.cartes("dis", portada.DISSENYS, "Quin disseny vols?",
                                        "UV: la pell d'un model amb textura. Pintar: imatges i colors per "
-                                       "capes. En blanc: el desplegable tal com és.")
+                                       "capes. En blanc: tal com és.")
                 if triat == "dis_uv":
                     ss["pantalla"] = "uv"
                     st.rerun()
@@ -531,7 +579,43 @@ if models:
                     ss["pantalla"] = "blanc"
                     st.rerun()
                 st.stop()
-            resultat_paper(ss["paper"])
+            (resultat_paper if branch.startswith("📄") else resultat_cares)(ss["paper" if branch.startswith("📄") else "cares"])
+            st.stop()
+
+        # ---- Cares (CNC): material, cares i suports, cadascun al seu apartat amb una mostra rotable
+        if cares_on:
+            pur_cnc = out in ("Làser / CNC", "CNC / làser")
+            plate_mm = cares.plate_scale(prepared)
+            fase = "cmat" if "cmat" not in ss else "ccar" if "ccar" not in ss else "csup"
+            titol, frase = {"cmat": ("Material", "El gruix i la planxa de què es tallen plaques i suports."),
+                            "ccar": ("Cares", "Com són les plaques: espai entre elles, xamfrà i fusió de les petites."),
+                            "csup": ("Suports", "Com s'uneixen les plaques: tipus, mida i repartiment dels suports.")}[fase]
+            portada.capcalera(titol, frase)
+            esq, dre = st.columns([2, 3], gap="large")
+            mat, car, sup = ss.get("cmat"), ss.get("ccar"), None
+            with esq:
+                if fase == "cmat":
+                    mat = cparam.material()
+                    nou, text, icona = mat, f"Material · {mat['thickness']:g} mm", "capes.png"
+                elif fase == "ccar":
+                    car = cparam.cares_p(out, pur_cnc, lamp_controls, size)
+                    nou, text, icona = car, f"Cares · xamfrà {car['chamfer_mm']:g} mm", "cares.png"
+                else:
+                    sup = cparam.suports(plate_mm, mat["thickness"], out, pur_cnc)
+                    nou, text, icona = sup, f"Suports · {sup['joint']}", "encaix_sota2.png"
+                if fase != "csup":
+                    if st.button("Continua", type="primary", use_container_width=True):
+                        ss[fase], ss[f"{fase}_mini"] = nou, (text, portada.icona(icona))
+                        st.rerun()
+                elif st.button("🚀 Generar cares", type="primary", use_container_width=True):
+                    ss["csup"], ss["csup_mini"] = nou, (text, portada.icona(icona))
+                    ss["gc"] = cparam.args(mat, car, sup)
+                    gen_cares(ss.get("cares_decor", {}))
+                    ss["tecnic"] = True
+                    st.rerun()
+            with dre:
+                cparam.mostra(mat or dict(thickness=3.0, sheet_mm=(600.0, 400.0)), car or cparam.DEF_CAR,
+                              sup or cparam.sup_def(plate_mm, (mat or {}).get("thickness", 3.0)), plate_mm)
             st.stop()
 
         decor = {}   # el disseny triat s'aplica en generar; el quadre de després el pot retocar
@@ -568,157 +652,7 @@ if models:
                                 s2.number_input("Alçada (mm)", 20.0, 5000.0, 400.0, 10.0, key="sheet_h"))
                 else:
                     sheet_mm = laser.SHEETS[sheet]
-            if branch.startswith("🔷"):
-                with c2:
-                    if out == "Mixta":
-                        m1, m2 = st.columns(2)
-                        plates_out = "CNC" if m1.radio("Plaques", ["CNC", "3D"], key="plates_out") == "CNC" else "3D"
-                        supports_out = "CNC" if m2.radio("Suports", ["CNC", "3D"], key="supports_out") == "CNC" else "3D"
-                    if supports_out == "3D":
-                        support_kind = st.radio("Tipus de suport 3D", ["Aresta", "Vèrtex (properament)"],
-                                                horizontal=True, key="support_kind",
-                                                help="Aresta: un suport per aresta, com ara. Vèrtex: una "
-                                                     "peça per vèrtex que uneix 3 o més plaques, molt "
-                                                     "adaptada a la forma.")
-                        if support_kind.startswith("Vèrtex"):
-                            st.info("Encara no disponible: es generen suports d'aresta.")
-                    gap = st.number_input("Espai entre cares (mm)", 0.0, 50.0, 0.0, 0.5,
-                                          help="Per a làmpades: deixa passar la llum entre plaques.")
-                    joint = st.radio("Suports", ["encaix", "cola"], horizontal=True,
-                                     help="Encaix: arc amb tenons que entren en ranures de les "
-                                          "plaques (els tenons es veuen per fora). Cola: estel "
-                                          "enganxat per dins, del tot invisible.")
-                    plate_mm = cares.plate_scale(prepared)
-                    sizing = st.radio("Mida dels suports", ["Automàtica (escala)", "Manual"],
-                                      horizontal=True,
-                                      help="Automàtica: el braç surt de la placa mitjana dividida per "
-                                           "l'escala, i per defecte un suport centrat per aresta.")
-                    if sizing.startswith("Auto"):
-                        ratio = st.slider("Escala placa mitjana / braç", 1.0, 4.0, 2.0, 0.1,
-                                          help="2 = el braç fa la meitat de la placa mitjana. Més "
-                                               "alt: suports més petits i més fàcils d'encabir; "
-                                               "per sota d'1,5 és fàcil que les plaques es "
-                                               "quedin soltes.")
-                        bracket = int(cares.auto_bracket(plate_mm, ratio, thickness))
-                        per = st.selectbox("Suports per aresta", ["1 centrat", "2", "3", "segons la distància"],
-                                           help="Els suports es reparteixen simètricament des del "
-                                                "mig cap als costats.")
-                        per_edge = {"1 centrat": 1, "2": 2, "3": 3}.get(per, 0)
-                        spacing = st.slider("Distància (si és segons la distància, mm)", 20, 200, 80,
-                                            disabled=per_edge > 0)
-                    else:
-                        bracket = st.slider("Llargada dels braços dels suports (mm)", 8, 60, 25)
-                        per_edge = 0
-                        spacing = st.slider("Distància entre suports d'una mateixa aresta (mm)", 20, 200, 80,
-                                            help="Amb els braços: pocs suports grans (distància i "
-                                                 "braços llargs) o molts de petits (curts i a prop), "
-                                                 "que caben millor a les plaques estretes.")
-                    escala = plate_mm / bracket
-                    (st.success if escala >= 2 else st.warning if escala >= 1.5 else st.error)(
-                        f"Placa mitjana {plate_mm:.0f} mm · braç {bracket} mm · escala "
-                        f"{escala:.1f}" + ("" if escala >= 1.5 else
-                                           " — massa justa: baixa les cares o escurça el braç"))
-                    chamfer_mm = st.slider("Xamfrà de les plaques (mm)", 0.0, 10.0, 1.0, 0.5,
-                                           help="Talla les cantonades que punxen de les plaques, "
-                                                "per a l'efecte (sobretot amb llum a dins). No "
-                                                "s'aplica als suports. 0 = sense.")
-                    max_leg = st.slider("Llargada màxima del braç (% de la placa)", 0, 100, 50, 5,
-                                        help="Un suport no passa d'aquest percentatge de la fondària "
-                                             "de la placa més petita que uneix (des de l'aresta). "
-                                             "0 = sense límit. Si no hi cap, es posen suports més "
-                                             "curts o més nombrosos.")
-                    merge_small = st.slider("Fusiona plaques més petites que (gruixos)", 0.0, 8.0, 4.0, 0.5,
-                                            help="Les plaques on no hi cap un cercle d'aquests "
-                                                 "gruixos de diàmetre no poden rebre suports: es "
-                                                 "fusionen amb la veïna més propera, si es pot sense "
-                                                 "deformar el model massa. 0 = no. No s'aplica "
-                                                 "amb textura.")
-                    grip = st.checkbox("Agafa les plaques petites pels extrems", True,
-                                       help="Si el braç no hi cap sencer en una placa petita, es posa "
-                                            "igualment recolzat a mitges i enganxat, sense tenó.")
-                    fill_gap = st.checkbox("Les puntes dels suports omplen l'escletxa (es veuen per fora)",
-                                           False, help="Només té sentit amb espai entre cares. "
-                                                       "Desactivat: suports del tot per dins.")
-                    tenon_chamfer = st.slider("Xamfrà dels tenons (mm)", 0.0, 1.5, 0.5, 0.1,
-                                              help="A les puntes dels tenons de suports i "
-                                                   "costelles, perquè entrin més fàcilment a les "
-                                                   "ranures (0,5–1 mm).")
-                    fast_ribs = st.checkbox("Cerca de costelles ràpida", False,
-                                            help="Amb formes arrodonides (moltes plaques petites) la "
-                                                 "cerca completa pot trigar molts minuts. La ràpida "
-                                                 "prova menys plans i s'atura als 10 s, però pot "
-                                                 "deixar més grups de plaques sense unir.")
-                    lamp = lamp_controls("cares", size, False)
-                    paper = st.checkbox("🗒️ Paper difusor per dins (tires per escletxa)", False,
-                                        help="Tires de paper que s'enganxen per dins i tapen les escletxes "
-                                             "entre plaques, amb osques per esquivar els suports. Surten "
-                                             "en planxes a part, per a tallar en paper.")
-                with st.expander("🧊 Parts massisses", expanded=False):
-                    st.caption("Grups de cares que es fan com una peça tancada i massissa per a la "
-                               "impressora 3D, agafada de la figura ajustada original (sense "
-                               "simplificar), en un material concret (p. ex. orelles o cua).")
-                    msig = (src, target, size)
-                    if st.session_state.get("massises_sig") != msig:
-                        st.session_state["massises"], st.session_state["massises_sig"] = [], msig
-                    chosen = st.multiselect("Cares de la part", [f"C{fr.index + 1}" for fr in frames],
-                                            key="massisa_cares")
-                    q1, q2 = st.columns(2)
-                    pname = q1.text_input("Nom", "orelles", key="massisa_nom")
-                    pmat = q2.text_input("Material", "Material A", key="massisa_material")
-                    if st.button("Afegeix la part massissa", disabled=not chosen or not pname.strip()):
-                        try:
-                            part, ok = massissa.solid_part(mesh, size, prepared, frames,
-                                                           [int(c[1:]) - 1 for c in chosen])
-                            st.session_state["massises"].append(
-                                (pname.strip(), pmat.strip() or "Material", part.export(file_type="stl"),
-                                 ok, len(chosen)))
-                        except Exception as e:
-                            st.error(str(e))
-                    for i, (n, mt, _b, ok, nc) in enumerate(st.session_state["massises"]):
-                        st.write(f"**{n}** · {mt} · {nc} cares" + ("" if ok else " · ⚠️ no estanca"))
-                    if st.session_state["massises"]:
-                        buf = io.BytesIO()
-                        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-                            for n, mt, b, _ok, _nc in st.session_state["massises"]:
-                                z.writestr(f"{mt}/{n}.stl", b)
-                        st.download_button("⬇️ Descarrega les parts massisses (STL per material)",
-                                           buf.getvalue(), "parts_massisses.zip", "application/zip")
-                        if st.button("Treu-les totes"):
-                            st.session_state["massises"] = []
-                            st.rerun()
-                st.caption("Les cares van millor amb models de poques zones planes (caixes, poliedres). "
-                           "Amb formes arrodonides i moltes cares, cada triangle és una placa: pot "
-                           "trigar molts minuts: baixa la simplificació o tria la cerca de costelles ràpida.")
-
-                ss["gc"] = ((thickness, gap, bracket, sheet_mm, joint),
-                            dict(fast_ribs=fast_ribs, bracket_spacing=spacing, chamfer_mm=chamfer_mm,
-                                 tenon_chamfer=tenon_chamfer, fill_gap=fill_gap, merge_small=merge_small,
-                                 per_edge=per_edge, grip=grip, lamp=lamp, paper=paper,
-                                 max_leg_frac=max_leg / 100))
-                r, prefix = ss.get("cares"), "cares"
-                if st.button("🚀 Generar cares", type="primary"):
-                    gen_cares(ss.get("cares_decor", {}))
-                    st.rerun()
-                r = ss.get("cares")
-                if r:
-                    if st.button("Amaga les cares" if ss.get("veure") else "Visualitza les cares",
-                                 type="tertiary", key="lnk_veure"):
-                        ss["veure"] = not ss.get("veure")
-                        st.rerun()
-                    botons_disseny()
-                if r:
-                    s = r.stats
-                    st.success(f"{s['plaques']} plaques · {s['suports']} suports · "
-                               f"{s['costelles']} costelles · {s['mitges_fustes']} mitges fustes · "
-                               f"{s['ranures']} ranures · "
-                               f"{s['planxes']} planxes")
-                    if s["grups_de_plaques"] > 1:
-                        st.warning(f"Les plaques queden en {s['grups_de_plaques']} grups sense "
-                                   "suport entre ells (a la vista, un color per grup): hi ha "
-                                   "plaques massa petites per a suports.")
-                    if ss.get("veure"):
-                        assembly_view(r, visor.cares_solids, "cares")
-            else:
+            if not cares_on:
                 with c2:
                     column = st.number_input("Diàmetre de les tiges (mm)", 1.0, 20.0, 5.0, 0.5)
                     wall = st.number_input("Buidar: gruix de paret (mm, 0 = massís)", 0.0, 50.0,

@@ -44,6 +44,12 @@ class Seam:
     inset: float = 0.0     # quant es retira cada placa des de l'aresta (sense la separació)
 
 
+
+def _vores(shape) -> np.ndarray:
+    """Punts de la vora exterior d'una forma, siguin un polígon o diversos (MultiPolygon)."""
+    return np.vstack([np.array(g.exterior.coords) for g in getattr(shape, "geoms", [shape])])
+
+
 def _section(seam: Seam, t: float):
     """Base del pla perpendicular a l'aresta: X = a (dins de p), Y = cap endins de p.
 
@@ -372,7 +378,7 @@ def half_lap(c: np.ndarray, seam: Seam, shape: Polygon, plane, t: float):
     a, b, d0 = float(X @ N), float(Y @ N), float((c - origin) @ N)
     ab = math.hypot(a, b)
     rib = unary_union([p.shape for p in rib_parts])
-    pts3 = np.array([c + X * x + Y * y + d3 * z for x, y in np.array(shape.exterior.coords)
+    pts3 = np.array([c + X * x + Y * y + d3 * z for x, y in _vores(shape)
                      for z in (-t / 2, t / 2)])
     dist = (pts3 - origin) @ N
     if dist.min() > t / 2 + SLOT_FIT or dist.max() < -t / 2 - SLOT_FIT:
@@ -1152,7 +1158,7 @@ def make_faces(mesh: trimesh.Trimesh, target_faces: int, size_mm: float, thickne
                 return math.inf
             e0, e1 = to2d(k, np.array([seam.e0, seam.e1]))
             d = (e1 - e0) / np.linalg.norm(e1 - e0)
-            pts = np.array(plates[k].shape.exterior.coords) - e0
+            pts = _vores(plates[k].shape) - e0
             return float(np.abs(pts[:, 0] * d[1] - pts[:, 1] * d[0]).max())
 
         def place(seam: Seam, s: float, options, relaxed: bool = False):

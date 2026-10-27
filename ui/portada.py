@@ -37,7 +37,7 @@ ORIGENS = [("model", "Model", "carpeta.png"), ("imatge", "Imatge", "imatge.png")
 VIES = [("carpeta", "Carpeta", "carpeta.png"), ("ia", "IA", "ia.png")]
 DISSENYS = [("dis_uv", "UV", "uv_importa.png"), ("dis_pintar", "Pintar", "dis_pintar.png"),
             ("dis_blanc", "En blanc", "dis_blanc.png")]
-PASSOS_EXTRES = ["orient", "encaix", "malla", "tecnic", "disseny"]  # passos de l'espai de treball, un cop triat el model
+PASSOS_EXTRES = ["orient", "encaix", "malla", "cmat", "ccar", "csup", "tecnic", "disseny"]  # passos de l'espai de treball, un cop triat el model
 PASSOS = ["producte", "sortida", "origen", "via"]  # "via" només si l'origen és una imatge
 
 # Pregunta i frase descriptiva de cada pas (la frase pot dependre del producte triat).

@@ -62,3 +62,55 @@ def test_neteja_torna_la_malla_amb_les_normals_cap_a_fora():
     rev = trimesh.creation.box((2, 2, 2))
     rev.invert()
     assert pc.clean(rev).volume > 0
+
+
+def test_malla_camp_estanca_sense_placa_ni_illes_i_amb_arestes_vives():
+    c = np.zeros((64, 64, 64), np.float32)
+    c[16:48, 20:44, 24:40] = 1.0          # caixa (la Z del camp és l'eix 0)
+    c[28:34, 28:34, 30:34] = 0.0          # buit intern: s'omple
+    c[2:6, 2:6, 2:6] = 1.0                # illa: fora
+    c[40, 2:-2, 2:-2] = 0.8               # placa espúria del decodificador (la vora queda buida)
+    m = imatge3d.malla_camp(c)
+    assert m.is_watertight and (np.bincount(m.edges_unique_inverse) <= 2).all() and m.volume > 0
+    assert len(m.split(only_watertight=False)) == 1
+    vox = m.extents * 64 / 2              # el costat llarg de la graella va de -1 a 1
+    assert np.allclose(vox, (16, 24, 32), atol=1.5)   # (x, y, z) = (W, H, D): sense la placa
+    # cares planes: gairebé tots els parells veïns són coplanaris (no s'ha difuminat)
+    assert (np.degrees(m.face_adjacency_angles) < 2).mean() > 0.8
+
+
+def _imatge_quadrat():
+    im = Image.new("RGB", (200, 200), "white")
+    im.paste((230, 120, 40), (50, 50, 150, 150))   # l'objecte: un quadrat taronja
+    im.paste((30, 20, 20), (90, 80, 110, 100))     # un «ull»
+    b = io.BytesIO()
+    im.save(b, "PNG")
+    return b.getvalue()
+
+
+def test_pell_projectada_davant_imatge_i_darrere_neutre():
+    import decor as dc
+    m = trimesh.creation.box((1, 1, 0.3))          # placa: la cara gran mira cap a +Z o -Z
+    glb = imatge3d.pell_projectada(m, _imatge_quadrat()).export(file_type="glb")
+    mesh, tex = dc.load_textured({"m.glb": glb})
+    assert tex is not None and len(mesh.faces) == len(m.faces)
+    H = tex.image.height
+    gran = np.abs(mesh.face_normals[:, 2]) > 0.9
+    neutre = np.all(np.isclose(tex.face_uv, (0.5, 8 / H)), axis=(1, 2))
+    # una cara gran veu la imatge (UV sobre el quadrat, de 50 a 150 px de 200); l'altra, neutra
+    for z in (1, -1):
+        costat = gran & (np.sign(mesh.face_normals[:, 2]) == z)
+        if not neutre[costat].any():
+            u = tex.face_uv[costat][..., 0]
+            assert abs(u.min() - 0.25) < 0.03 and abs(u.max() - 0.75) < 0.03
+            assert neutre[gran & ~costat].all()
+            break
+    else:
+        raise AssertionError("cap cara gran no veu la imatge")
+
+
+def test_mascara_detalls_només_la_taca_dins_la_capsa():
+    im = Image.open(io.BytesIO(_imatge_quadrat())).convert("RGB")
+    m = imatge3d.mascara_detalls(im, [(92 / 200, 82 / 200, 108 / 200, 98 / 200)])   # capsa justa
+    assert m[90, 100] and m[85, 95]
+    assert not m[60, 60] and not m[10, 10] and m.sum() <= 20 * 20 + 10

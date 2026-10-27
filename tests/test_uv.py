@@ -110,15 +110,20 @@ def test_textura_uv_arriba_al_desplegable():
     assert sum(p.count("<image") for p in r.pages) >= 1
 
 
-def test_colors_del_render_texturitzat():
-    """Cada triangle porta el color de la capa que té damunt (la de la cara, sobre la del grup)."""
+def test_render_texturitzat_amb_marc():
+    """El render porta el color de cada capa i, amb marc, la vora de la cara queda sense decorar."""
     import decor as dc
     from ui import pintura
     m = trimesh.creation.box((40, 30, 20))
     fr = dc.face_frames(m)
     ops = [dict(nivell="grup", tipus="color", color="#ff0000", cares=[0, 1]),
            dict(nivell="cara", tipus="color", color="#00ff00", cares=[0])]
-    c = pintura.colors(fr, m, None, ops)
-    assert c.shape == (len(m.faces), 3)
-    assert (c[fr[0].faces] == (0, 255, 0)).all() and (c[fr[1].faces] == (255, 0, 0)).all()
-    assert (c[fr[2].faces] == (220, 194, 154)).all()   # sense capes: color base
+    base = (220, 194, 154)
+    sub, c = pintura.render(fr, m, None, ops)
+    assert c.shape == (len(sub.faces), 3) and abs(sub.area - m.area) < 1e-6
+    assert {tuple(x) for x in c} == {(0, 255, 0), (255, 0, 0), base}
+    sub, c = pintura.render(fr, m, None, ops, marc=4.0)
+    c = c.reshape(-1, 3)
+    n = fr[0].normal
+    cara0 = np.isclose(sub.triangles_center @ n, m.vertices[m.faces[fr[0].faces[0]][0]] @ n)
+    assert (c[cara0] == (0, 255, 0)).any() and (c[cara0] == base).any()   # centre pintat, vora sense

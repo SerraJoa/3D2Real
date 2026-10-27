@@ -114,20 +114,33 @@ def cara(frame, mesh, tex, ops: list[dict], marc: float) -> bytes | None:
     return buf.getvalue()
 
 
-def colors(frames, mesh, tex, ops: list[dict], base=(220, 194, 154)) -> np.ndarray:
-    """Color (F, 3) de cada triangle de la malla amb totes les capes: per al render texturitzat."""
-    out = np.tile(np.array(base, np.uint8), (len(mesh.faces), 1))
+def render(frames, mesh, tex, ops: list[dict], marc: float = 0.0, base=(220, 194, 154), max_faces: int = 90000):
+    """(malla, colors (F, 3)) per al render texturitzat. Cada cara es subdivideix en triangles prou
+    petits perquè es vegin el marc i el detall de la imatge (un color per triangle)."""
+    import trimesh
+    area = sum(float(mesh.area_faces[fr.faces].sum()) for fr in frames) or 1.0
+    pla = marc == 0 and all(o["tipus"] == "color" for o in ops)   # colors plans sense marc: no cal detall
+    vora = float("inf") if pla else max(marc / 2, (area / (0.43 * max_faces / 6)) ** 0.5)
+    vs, fs, cs, off = [], [], [], 0
     for fr in frames:
-        res = _composa(fr, mesh, tex, [o for o in ops if fr.index in o["cares"]], 0.0)
-        if res is None:
-            continue
-        img, P = res
-        arr = np.asarray(img)
-        for f in fr.faces:
-            c = P(fr.to_local(mesh.vertices[mesh.faces[f]]).mean(0, keepdims=True))[0]
-            x, y = int(np.clip(c[0], 0, arr.shape[1] - 1)), int(np.clip(c[1], 0, arr.shape[0] - 1))
-            out[f] = arr[y, x]
-    return out
+        sub = trimesh.Trimesh(mesh.vertices, mesh.faces[fr.faces], process=False)
+        v, f = trimesh.remesh.subdivide_to_size(sub.vertices, sub.faces, max_edge=vora)
+        res = _composa(fr, mesh, tex, [o for o in ops if fr.index in o["cares"]], marc)
+        col = np.tile(np.array(base, np.uint8), (len(f), 1))
+        if res is not None:
+            img, P = res
+            arr = np.asarray(img)
+            c = P(fr.to_local(v[f].mean(1)))
+            ix, iy = np.floor(c[:, 0]).astype(int), np.floor(c[:, 1]).astype(int)
+            fora = (ix < 0) | (iy < 0) | (ix >= arr.shape[1]) | (iy >= arr.shape[0])
+            x, y = np.clip(ix, 0, arr.shape[1] - 1), np.clip(iy, 0, arr.shape[0] - 1)
+            col = arr[y, x]
+            # fora del marc (la zona no decorada) es queda el color base
+            fora |= np.asarray(_mascara(_clip(fr, marc), P, arr.shape[1], arr.shape[0]))[y, x] == 0
+            col[fora] = base
+        vs.append(v), fs.append(f + off), cs.append(col)
+        off += len(v)
+    return trimesh.Trimesh(np.vstack(vs), np.vstack(fs), process=False), np.vstack(cs)
 
 
 def decoracio(frames, mesh, tex, ops: list[dict], marc: float, laser: bool, llindar: int) -> dict:
