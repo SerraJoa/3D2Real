@@ -130,6 +130,12 @@ if "fitxers" not in ss:   # el model arriba des de la targeta del pas: pàgina p
                                          help="Extreu la superfície del camp en brut de Hunyuan, sense "
                                               "suavitzar: conserva facetes i arestes vives. Cal el node "
                                               "SaveVoxelNpy (comfy_nodes/) a ComfyUI.")
+                    detalls_fora = st.checkbox("Treu els detalls fins abans del 3D (millor malla)", False,
+                                               key="img_sense_detalls",
+                                               help="Una IA (FLUX.2 Klein, ~1 min) treu ulls, nas i boca de la imatge i "
+                                                    "Hunyuan genera la malla des d'aquesta versió; la pell surt de "
+                                                    "l'original. Només amb la malla nítida.",
+                                               disabled=not nitida)
                 if st.button("Accepta la imatge i continua", type="primary", use_container_width=True):
                     barra = st.progress(0.0, text="Generant el model 3D…")
 
@@ -138,7 +144,7 @@ if "fitxers" not in ss:   # el model arriba des de la targeta del pas: pàgina p
                                        text=f"Generant el model 3D… {int(t)} s (uns minuts)")
                     try:
                         glb = (imatge3d.genera_nitida if nitida else imatge3d.genera)(
-                            img_up.getvalue(), comfy, progres=avanca)
+                            img_up.getvalue(), comfy, progres=avanca, **({"detalls_fora": True} if nitida and detalls_fora else {}))
                         ss["fitxers"] = {img_up.name.rsplit(".", 1)[0] + "_3d.glb": glb}
                         st.rerun()
                     except RuntimeError as e:

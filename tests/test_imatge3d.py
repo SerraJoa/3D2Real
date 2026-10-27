@@ -114,3 +114,24 @@ def test_mascara_detalls_només_la_taca_dins_la_capsa():
     m = imatge3d.mascara_detalls(im, [(92 / 200, 82 / 200, 108 / 200, 98 / 200)])   # capsa justa
     assert m[90, 100] and m[85, 95]
     assert not m[60, 60] and not m[10, 10] and m.sum() <= 20 * 20 + 10
+
+
+def test_pell_per_cares_deforma_el_dibuix_perquè_cobreixi_la_cara():
+    # placa de 1 × 1 que mira la càmera: el quadrat del dibuix (50..150 de 200 px) li cau exactament a sobre
+    V = np.array([[-.5, -.5, 0], [.5, -.5, 0], [.5, .5, 0], [-.5, .5, 0]], float)
+    m = trimesh.Trimesh(V, [[0, 1, 2], [0, 2, 3]], process=False)
+    cam = (np.eye(3), np.zeros(3), 512.0, 512.0, 512.0)       # px = 512 + 512·(x, −y) a la imatge de 1024
+    r = imatge3d.pell_per_cares(m, _imatge_quadrat(), camera=cam, cel=40)
+    assert len(r.faces) == 2 and r.visual.uv.shape == (6, 2)
+    a = np.asarray(r.visual.material.image, float)
+    fosc = a.sum(2) < 200                                    # l'«ull» (20 × 20 de 100 × 100 = 4 % de la cara)
+    assert 0.025 < fosc.sum() / (2 * 40 * 40) < 0.055
+
+
+def test_pell_per_cares_la_cara_d_esquena_i_la_tapada_queden_neutres():
+    V = np.array([[-.5, -.5, 0], [.5, -.5, 0], [.5, .5, 0], [-.5, .5, 0]], float)
+    m = trimesh.Trimesh(V, [[0, 2, 1], [0, 3, 2]], process=False)      # girada: mira cap enrere
+    cam = (np.eye(3), np.zeros(3), 512.0, 512.0, 512.0)
+    r = imatge3d.pell_per_cares(m, _imatge_quadrat(), camera=cam, cel=16)
+    a = np.asarray(r.visual.material.image, float).reshape(-1, 3)
+    assert (a.sum(1) < 200).sum() == 0                       # cap píxel fosc: no s'hi ha pintat l'ull

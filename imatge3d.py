@@ -19,6 +19,7 @@ import trimesh
 from PIL import Image, ImageDraw
 
 WORKFLOW = Path(__file__).with_name("workflows") / "hunyuan21_imatge_a_3d.json"
+WORKFLOWS_KLEIN = Path(__file__).with_name("workflows") / "klein_edit1.json"
 Z_UP_TO_Y_UP = trimesh.transformations.rotation_matrix(np.radians(90), [1, 0, 0])
 
 
@@ -345,14 +346,111 @@ def pell_projectada(mesh: trimesh.Trimesh, imatge: bytes, detalls=None) -> trime
     return out
 
 
+def pell_per_cares(mesh: trimesh.Trimesh, imatge: bytes, camera=None, cel: int | None = None,
+                   detalls=None, mida: int = 1024) -> trimesh.Trimesh:
+    """Textura per cara a partir del dibuix original. Cada cara objectiu té la seva cel·la a l'atles:
+    el seu perímetre es projecta sobre el dibuix (càmera encaixada per silueta), es retalla i la imatge
+    es deforma perquè cobreixi la cara (cada texel agafa el píxel on cau el seu punt 3D). Les cares
+    obliqües queden estirades, no escapçades. Només s'hi pinta el que la càmera veu de debò: on una
+    altra cara tapa el punt, o la cara mira d'esquena, queda el color mitjà de l'objecte.
+    `camera`: (R, c, s, tx, ty) de `camera_imatge` (p. ex. la de la malla densa; si no, s'ajusta amb
+    `mesh`). `detalls`: capses d'un VL; amb elles només es mantenen aquests detalls sobre blanc.
+    Torna la malla sense vèrtexs compartits (UV per cantonada)."""
+    from scipy import ndimage
+
+    img = Image.open(io.BytesIO(prepara_imatge(imatge, mida))).convert("RGB")
+    W = img.width
+    mask = _silueta_imatge(img)
+    R, c, s, tx, ty = camera if camera is not None else camera_imatge(mesh, mask)
+    P = (mesh.vertices - c) @ R.T
+    px = np.column_stack([tx + s * P[:, 0], ty - s * P[:, 1]])
+    F = np.asarray(mesh.faces)
+    n = len(F)
+    ids = Image.new("I", (W, W), 0)
+    d = ImageDraw.Draw(ids)
+    for f in np.argsort(P[F, 2].mean(1)):                       # de lluny a prop: la cara més propera guanya
+        d.polygon([tuple(p) for p in px[F[f]]], fill=int(f) + 1)
+    ids = np.asarray(ids)
+    davant = (mesh.face_normals @ R.T)[:, 2] > 0
+
+    neutre = np.array(np.median(np.asarray(img)[mask], 0), float)
+    arr = np.asarray(img, float)
+    if detalls is not None:
+        neutre = np.array([255.0, 255.0, 255.0])
+        arr = np.where(mascara_detalls(img, detalls)[..., None], arr, neutre)
+
+    dins = ndimage.binary_erosion(mask, iterations=2).astype(float)
+    cols = int(np.ceil(np.sqrt(n)))
+    k = cel or max(8, min(48, 4096 // cols))
+    S = cols * k
+    t = (np.arange(k) + 0.5) / k
+    A, B = np.meshgrid(t, t, indexing="ij")                     # A al llarg de v0→v1, B de v0→v2
+    fold = A + B > 1                                            # mig quadrat és fora del triangle: es plega a l'aresta
+    A, B = np.where(fold, 1 - B, A), np.where(fold, 1 - A, B)
+    atles = np.empty((S, S, 3))
+    atles[:] = neutre
+    for f0 in range(0, n, 256):                                 # per tongades: la memòria no depèn de n
+        fs = np.arange(f0, min(f0 + 256, n))
+        T = mesh.vertices[F[fs]]                                # (m, 3, 3)
+        X = T[:, 0, None, None, :] + A[None, :, :, None] * (T[:, 1] - T[:, 0])[:, None, None, :] \
+            + B[None, :, :, None] * (T[:, 2] - T[:, 0])[:, None, None, :]
+        Q = (X - c) @ R.T
+        u, v = tx + s * Q[..., 0], ty - s * Q[..., 1]           # píxels del dibuix
+        vist = np.zeros(u.shape, bool)
+        ui, vi = np.round(u).astype(int), np.round(v).astype(int)
+        for dx in (-1, 0, 1):                                   # un píxel de marge: les vores no es perden
+            for dy in (-1, 0, 1):
+                xx, yy = np.clip(ui + dx, 0, W - 1), np.clip(vi + dy, 0, W - 1)
+                vist |= ids[yy, xx] == (fs + 1)[:, None, None]
+        vist &= davant[fs][:, None, None]
+        vist &= ndimage.map_coordinates(dins, [v, u], order=0, mode="constant") > 0.5   # el fons no és pell
+        col = np.stack([ndimage.map_coordinates(arr[..., q], [v, u], order=1, mode="nearest")
+                        for q in range(3)], -1)
+        col = np.where(vist[..., None], col, neutre)
+        for i, f in enumerate(fs):
+            ci, cj = f % cols, f // cols
+            atles[cj * k:(cj + 1) * k, ci * k:(ci + 1) * k] = col[i].transpose(1, 0, 2)   # (B, A) → files, columnes
+    ci, cj = np.arange(n) % cols, np.arange(n) // cols
+    pad = 0.5
+    cant = np.array([[0, 0], [1, 0], [0, 1]], float)           # (A, B) de cada cantonada
+    uv = np.stack([(ci[:, None] * k + pad + cant[None, :, 0] * (k - 2 * pad)) / S,
+                   1 - (cj[:, None] * k + pad + cant[None, :, 1] * (k - 2 * pad)) / S], -1)
+    out = trimesh.Trimesh(mesh.vertices[F].reshape(-1, 3), np.arange(n * 3).reshape(-1, 3), process=False)
+    out.visual = trimesh.visual.TextureVisuals(uv=uv.reshape(-1, 2),
+                                               image=Image.fromarray(atles.clip(0, 255).astype(np.uint8)))
+    return out
+
+
+SENSE_DETALLS = ("Remove the eyes, the nose and the mouth. Keep the same low poly flat-shaded faces, the same colors, "
+                 "shape, pose and white background. The face must stay a plain smooth muzzle with no facial features.")
+
+
+def sense_detalls(imatge: bytes, base: str = "http://127.0.0.1:8188", espera_max: float = 600) -> bytes:
+    """La imatge sense els detalls fins (ulls, nas, boca) per donar-la a Hunyuan: la malla en surt més neta.
+    FLUX.2 Klein (una referència, 4 passos, ~1 min). La silueta es conserva (IoU 0,99 amb l'original a la guineu),
+    així que la malla encara s'alinea amb el dibuix original, d'on surt la pell. Torna un PNG."""
+    base = base.rstrip("/")
+    nom = f"d2r_sd_{uuid.uuid4().hex[:8]}.png"
+    _puja(base, nom, prepara_imatge(imatge, 1024))
+    wf = json.loads(WORKFLOWS_KLEIN.read_text().replace("__IMAGE__", nom).replace("__PROMPT__", SENSE_DETALLS))
+    r = _json(f"{base}/prompt", {"prompt": wf})
+    sortida = _espera(base, r["prompt_id"], espera_max)
+    f = [x for v in sortida.values() for l in v.values() for x in l
+         if isinstance(x, dict) and str(x.get("filename", "")).endswith(".png")][-1]
+    q = urllib.parse.urlencode({"filename": f["filename"], "subfolder": f["subfolder"], "type": f["type"]})
+    with urllib.request.urlopen(f"{base}/view?{q}", timeout=120) as resp:
+        return resp.read()
+
+
 def genera_nitida(imatge: bytes, base: str = "http://127.0.0.1:8188", passos: int = 30,
-                  resolucio: int = 256, espera_max: float = 900, progres=None) -> bytes:
+                  resolucio: int = 256, espera_max: float = 900, progres=None, detalls_fora: bool = False) -> bytes:
     """Com `genera` però amb la superfície extreta del camp en brut: conserva les cares planes i
     les arestes vives. Torna un GLB (Y amunt)."""
     base = base.rstrip("/")
     nom = f"d2r_{uuid.uuid4().hex[:8]}.png"
+    geometria = sense_detalls(imatge, base) if detalls_fora else imatge   # la pell sempre surt de l'original
     try:
-        _puja(base, nom, prepara_imatge(imatge))
+        _puja(base, nom, prepara_imatge(geometria))
         wf = json.loads(WORKFLOW.read_text().replace("__IMAGE__", nom))
         del wf["19:9"], wf["10"]   # sense malla de ComfyUI: només el camp
         wf["19:7"]["inputs"]["steps"] = passos
