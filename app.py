@@ -1,6 +1,7 @@
 import base64
 import io
 import math
+import traceback
 import zipfile
 
 import numpy as np
@@ -145,7 +146,12 @@ if "fitxers" not in ss:   # el model arriba des de la targeta del pas: pàgina p
                     try:
                         glb = (imatge3d.genera_nitida if nitida else imatge3d.genera)(
                             img_up.getvalue(), comfy, progres=avanca, **({"detalls_fora": True} if nitida and detalls_fora else {}))
-                        ss["fitxers"] = {img_up.name.rsplit(".", 1)[0] + "_3d.glb": glb}
+                        nom_glb = img_up.name.rsplit(".", 1)[0] + "_3d.glb"
+                        ss["fitxers"] = {nom_glb: glb}
+                        ss["recursos_origen"] = [("⬇️ Imatge d'origen", img_up.getvalue(), img_up.name, "image/jpeg" if img_up.name.lower().endswith((".jpg", ".jpeg")) else "image/png"),
+                                                 ("⬇️ Model generat (GLB)", glb, nom_glb, "model/gltf-binary")]
+                        for _t, dades_, nom_, _m in ss["recursos_origen"]:
+                            carpeta.desa(nom_, dades_)
                         st.rerun()
                     except RuntimeError as e:
                         barra.empty()
@@ -185,7 +191,7 @@ def malla_controls(nfaces: int):
                                 "canviar d'inclinació, i al final les vores i els detalls.")
     else:
         target = nfaces   # capes: es talla el model original, sense simplificar
-        method, sym, detail, harm, flat = "Ràpida", "no", 0, False, False
+        method, sym, detail, harm, flat, estr = "Ràpida", "no", 0, False, False, False
     if simplify_on:
         r1 = r2 = r3 = r4 = st.container()
         with r1:
@@ -206,15 +212,40 @@ def malla_controls(nfaces: int):
                                help="Quant costa simplificar el relleu, les vores i el dibuix de "
                                     "la textura respecte de la resta (0 = com la ràpida).")
         with r4:
-            harm = st.checkbox("Harmonitzar", True, disabled=method != "Respecta la forma",
+            off = method != "Respecta la forma"
+            harm = st.checkbox("Harmonitzar", True, disabled=off,
                                help="Pas final: gira arestes i relaxa vèrtexs perquè els triangles "
                                     "siguin més regulars (menys de prims), sense moure les vores "
                                     "vives ni sortir de la superfície. No s'aplica amb simetria.")
-            flat = st.checkbox("Aplanar", True, disabled=method != "Respecta la forma",
+            harm_t = st.slider("Tolerància de pla (°)", 1.0, 30.0, 8.0, 0.5, disabled=off or not harm,
+                               help="Dos triangles veïns que difereixen menys d'aquest angle es "
+                                    "consideren al mateix pla i es poden girar per regularitzar-los. "
+                                    "Més alt = més regularització, però pot arrodonir arestes suaus.")
+            flat = st.checkbox("Aplanar", True, disabled=off,
                                help="Posa al mateix pla les cares veïnes que ja són gairebé "
                                     "coplanars (una base, el lateral d'una pota): es tallen com "
                                     "una sola placa i el desplegable no les parteix.")
-    return size, target, method, sym, detail, harm, flat
+            flat_a = st.slider("Aplanar: angle màxim (°)", 1.0, 30.0, 8.0, 0.5, disabled=off or not flat,
+                               help="Màxima inclinació de les cares que s'ajunten en un pla.")
+            flat_d = st.slider("Aplanar: distància màxima (% mida)", 0.1, 5.0, 1.2, 0.1,
+                               disabled=off or not flat,
+                               help="Màxima distància d'un vèrtex al pla ajustat, en % de la diagonal.")
+            estr = st.checkbox("Treure estretes", True, disabled=off,
+                               help="Elimina els triangles llargs i estrets i petits, que aporten poc i "
+                                    "compliquen el muntatge: se'n col·lapsa l'aresta curta i els veïns "
+                                    "s'hi adapten, només si la forma gairebé no canvia. No s'aplica amb simetria.")
+            estr_d = st.slider("Estretes: desviació màxima (% mida)", 0.1, 3.0, 0.8, 0.1,
+                               disabled=off or not estr,
+                               help="Quant pot allunyar-se de la forma original el vèrtex que queda. "
+                                    "Més alt = en treu més, a canvi de més deformació.")
+            estr_q = st.slider("Estretes: estretor", 0.1, 0.6, 0.3, 0.05, disabled=off or not estr,
+                               help="Qualitat màxima d'un triangle per considerar-lo estret (1 = equilàter). "
+                                    "Més alt = en considera estretes més.")
+            # False = no es fa; si no, la tolerància (vegeu `reduccio.reduce`)
+            harm = harm_t if harm else False
+            flat = (flat_a, flat_d) if flat else False
+            estr = (estr_d, estr_q) if estr else False
+    return size, target, method, sym, detail, harm, flat, estr
 
 
 if models:
@@ -321,17 +352,17 @@ if models:
             ctx = ctrl_col
         else:
             ctx = st.container()
-        size, target, method, sym, detail, harm, flat = malla
+        size, target, method, sym, detail, harm, flat, estr = malla
         with ctx:
             if simplify_on:
                 if method == "Respecta la forma" and len(mesh.faces) > target:
                     red_cache = st.session_state.setdefault("_reduccio", {})
-                    key = (src, target, sym, detail, harm, flat)
+                    key = (src, target, sym, detail, harm, flat, estr)
                     if key not in red_cache:
                         red_cache.clear()
                         with st.spinner("Reduint la malla respectant la forma…"):
                             red_cache[key] = reduccio.reduce(mesh, target, sym, float(detail), texture,
-                                                             mesh if texture is not None else None, harm, flat)
+                                                             mesh if texture is not None else None, harm, flat, estr)
                     reduced, red_info = red_cache[key]
                     # Les branques fan servir aquesta reducció (papercraft.simplify la reconeix).
                     mesh.metadata["reduccio"] = (target, reduced)
@@ -352,9 +383,9 @@ if models:
             cache = st.session_state.setdefault("_model_view", {})
             with vista_col:
                 if simplify_on:
-                    if cache.get("simple_key") != (src, target, size, method, sym, detail, harm, flat):
+                    if cache.get("simple_key") != (src, target, size, method, sym, detail, harm, flat, estr):
                         cache.clear()
-                        cache.update(simple_key=(src, target, size, method, sym, detail, harm, flat),
+                        cache.update(simple_key=(src, target, size, method, sym, detail, harm, flat, estr),
                                      simple=visor.pack(visor.model_solids(prepared, "Simplificat", "#dcc29a",
                                                                           edges="totes")))
                     st.markdown(f"**Simplificat** · {len(prepared.faces):,} cares · "
@@ -372,7 +403,7 @@ if models:
                 if st.button("Continua", type="primary", use_container_width=True):
                     low = pc.simplify(prepared, 300) if len(prepared.faces) > 300 else prepared
                     svg = vista.view_svg(low, ["#dcc29a"] * len(low.faces), width=200, yaw=35, pitch=22)
-                    ss["malla"] = (size, target, method, sym, detail, harm, flat)
+                    ss["malla"] = (size, target, method, sym, detail, harm, flat, estr)
                     ss["malla_mini"] = (f"{len(prepared.faces):,} cares",
                                         "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode())
                     st.rerun()
@@ -526,7 +557,7 @@ if models:
                     if ss.get("desplegat_html"):
                         recursos.obre("🔍 Visualitza el desplegat (pestanya nova)", ss["desplegat_html"],
                                       "obre_desplegat_final")
-                    for i, (text, dades, nom, mime) in enumerate(ss.get("recursos", [])):
+                    for i, (text, dades, nom, mime) in enumerate(portada.tots_recursos()):
                         st.download_button(text, dades, nom, mime, key=f"recf_{i}", use_container_width=True,
                                            type="primary" if i == 0 else "secondary")
             st.info("Contínua = tall · ratlles = plec de vall · punt i ratlla = plec de muntanya · "
@@ -556,7 +587,7 @@ if models:
             with cols[-1]:
                 with st.container(key="recursos_final", border=True):
                     st.markdown("### 📦 Recursos")
-                    for i, (text, dades, nom, mime) in enumerate(ss.get("recursos", [])):
+                    for i, (text, dades, nom, mime) in enumerate(portada.tots_recursos()):
                         st.download_button(text, dades, nom, mime, key=f"recf_{i}", use_container_width=True,
                                            type="primary" if i == 0 else "secondary")
             st.info("Vermell = tallar · blau = gravar · verd = només referència (plaques amb gravat decoratiu: "
@@ -787,4 +818,5 @@ if models:
                     st.text("\n".join(r.notes))
                 show(r.sheets, "Planxa")
     except Exception as e:
+        traceback.print_exc()   # el missatge surt a la pantalla; el traçat, al registre del servidor
         st.error(str(e))

@@ -100,6 +100,10 @@ def simplify(mesh: trimesh.Trimesh, target: int) -> trimesh.Trimesh:
         return pre[1].copy()
     if len(mesh.faces) <= target:
         return mesh.copy()
+    # Un GLB amb textura té els vèrtexs duplicats a cada costura d'UV (o 3 per cara): sense soldar-los
+    # el reductor no veu veïns i deixa una pols de triangles.
+    mesh = mesh.copy()
+    mesh.merge_vertices()
     for args in (dict(face_count=target), dict(target_faces=target)):
         try:
             return clean(mesh.simplify_quadric_decimation(**args))

@@ -57,6 +57,7 @@ def talla(mesh, tipus: str, desp=ZERO, cap: bool = True):
         return mesh
     fixos = plans(mesh, tipus)
     out = mesh.copy()
+    out.merge_vertices()   # un GLB amb textura duplica vèrtexs a les costures: sense soldar no és estanc i no hi ha tapa
     out.apply_transform(moviment(mesh, desp))
     for punt, normal in fixos:
         cut = out.slice_plane(punt, normal, cap=cap and out.is_watertight)
@@ -249,9 +250,9 @@ export default function({ data, parentElement, setTriggerValue }) {
     { nom: 'Isomètrica', iso: true }];
   root.innerHTML = '<div class="grid"></div>';
   const grid = root.querySelector('.grid');
+  // cada lliscador té al costat una casella numèrica (sense límit) que es manté sincronitzada
   const sync = (kind, ax, val, from) => root.querySelectorAll(`input[data-k="${kind}${ax}"]`).forEach(i => {
-    if (i !== from) i.value = val; i.nextElementSibling.textContent = fmt(kind, val); });
-  const fmt = (kind, v) => kind === 't' ? `${(+v).toFixed(1)} %` : `${v}°`;
+    if (i !== from) i.value = val; });
   const cells = VISTES.map(v => {
     const c = document.createElement('div'); c.className = 'cel';
     c.innerHTML = `<div class="tit">${v.nom}</div><canvas></canvas>`;
@@ -260,10 +261,14 @@ export default function({ data, parentElement, setTriggerValue }) {
       for (const [kind, ax, et] of sl) {
         const row = document.createElement('label'); row.className = 'sl';
         const val = kind === 't' ? S.t[ax] : S.r[ax];
-        row.innerHTML = `<span>${et}</span><input type="range" data-k="${kind}${ax}" min="${kind === 't' ? -60 : -180}"
-          max="${kind === 't' ? 60 : 180}" step="${kind === 't' ? 0.5 : 1}" value="${val}"><b>${fmt(kind, val)}</b>`;
-        const inp = row.querySelector('input');
-        inp.oninput = () => { (kind === 't' ? S.t : S.r)[ax] = +inp.value; sync(kind, ax, inp.value, inp); draw(); };
+        const pas = kind === 't' ? 0.5 : 1;
+        row.innerHTML = `<span>${et}</span><input type="range" data-k="${kind}${ax}" min="${kind === 't' ? -150 : -360}"
+          max="${kind === 't' ? 150 : 360}" step="${pas}" value="${val}">
+          <input type="number" class="num" data-k="${kind}${ax}" step="${pas}" value="${val}"><u>${kind === 't' ? '%' : '°'}</u>`;
+        row.querySelectorAll('input').forEach(inp => {
+          inp.oninput = () => { if (inp.value === '' || isNaN(+inp.value)) return;
+            (kind === 't' ? S.t : S.r)[ax] = +inp.value; sync(kind, ax, inp.value, inp); draw(); };
+        });
         c.appendChild(row);
       }
     } else {
@@ -280,7 +285,7 @@ export default function({ data, parentElement, setTriggerValue }) {
   segs.forEach(b => b.onclick = () => { S.cap = b.dataset.cap === '1'; pintaCap(); });
   pintaCap();
   root.querySelector('.rst').onclick = () => { S.t = [0, 0, 0]; S.r = [0, 0, 0];
-    root.querySelectorAll('input[data-k]').forEach(i => { i.value = 0; i.nextElementSibling.textContent = fmt(i.dataset.k[0], 0); }); draw(); };
+    root.querySelectorAll('input[data-k]').forEach(i => { i.value = 0; }); draw(); };
   root.querySelector('.ok').onclick = () => setTriggerValue('tria', { t: S.t.map(x => x * ext / 100), r: S.r, cap: S.cap });
   root.querySelector('.bk').onclick = () => setTriggerValue('enrere', true);
 
@@ -359,8 +364,10 @@ _CSS = """
 .tit { font-weight: 600; text-align: center; }
 .cel canvas { width: 100%; aspect-ratio: 1 / 1; border-radius: 14px; background: #f7f7f5;
               border: 1px solid rgba(128,128,128,.35); }
-.sl { display: grid; grid-template-columns: 3.2rem 1fr 3.6rem; align-items: center; gap: 6px; font-size: .85rem; }
-.sl b { font-weight: 500; text-align: right; }
+.sl { display: grid; grid-template-columns: 3.2rem 1fr 4.2rem 1rem; align-items: center; gap: 6px; font-size: .85rem; }
+.sl u { text-decoration: none; opacity: .7; }
+.sl .num { width: 100%; box-sizing: border-box; padding: 2px 4px; border: 1px solid rgba(128,128,128,.5);
+           border-radius: 6px; background: transparent; color: inherit; text-align: right; }
 .btns { display: flex; flex-direction: column; gap: 8px; }
 .btns button { border: 1px solid #888; border-radius: 10px; background: transparent; color: inherit;
                padding: 6px 12px; cursor: pointer; }

@@ -390,7 +390,7 @@ def qem(V: np.ndarray, F: np.ndarray, target: int, weight: np.ndarray,
 
 def reduce(mesh: trimesh.Trimesh, target: int, symmetry: str = "no", detail: float = 30.0,
            texture=None, texture_mesh: trimesh.Trimesh | None = None, harmonize_: bool = True,
-           flatten: bool = True):
+           flatten: bool = True, estretes: bool = False):
     """Simplifica `mesh` a unes `target` cares respectant la forma.
 
     `symmetry`: "no" (per defecte: no s'imposa cap simetria), "auto" (si el model ja és
@@ -398,6 +398,10 @@ def reduce(mesh: trimesh.Trimesh, target: int, symmetry: str = "no", detail: flo
     `detail`: quant pesen els detalls (0 = QEM normal). `harmonize_`: pas final que fa els
     triangles més regulars (vegeu `harmonize`; no s'aplica amb simetria, que trencaria).
     `flatten`: posa al mateix pla les cares veïnes gairebé coplanars (vegeu `planarize`).
+    `estretes`: treu els triangles estrets i petits (vegeu `elimina_estretes`; amb simetria no).
+    Els tres últims són False (no es fa), True (toleràncies per defecte) o la tolerància:
+    `harmonize_` = graus de `flat_deg`, `flatten` = (graus, % de la diagonal) de `planarize`,
+    `estretes` = (% de la diagonal, qualitat màxima) de `elimina_estretes`.
     Retorna (malla, informació).
     """
     import papercraft as pc
@@ -445,10 +449,17 @@ def reduce(mesh: trimesh.Trimesh, target: int, symmetry: str = "no", detail: flo
     else:
         out = pc.clean(qem(pre.vertices, pre.faces, target, weight))
     if harmonize_ and info["simetria"] is None:
-        out = pc.clean(harmonize(out, pre))
+        out = pc.clean(harmonize(out, pre) if harmonize_ is True
+                       else harmonize(out, pre, flat_deg=float(harmonize_)))
         info["harmonitzada"] = True
+    if estretes and info["simetria"] is None:
+        out, n_est = elimina_estretes(out, pre) if estretes is True else elimina_estretes(
+            out, pre, q_max=float(estretes[1]), tol=float(estretes[0]) / 100)
+        out = pc.clean(out)
+        info["estretes_tretes"] = n_est
     if flatten and info["simetria"] is None:  # amb simetria, es trencaria
-        out, n_flat = planarize(out)
+        out, n_flat = planarize(out) if flatten is True else planarize(
+            out, tol_deg=float(flatten[0]), dist_frac=float(flatten[1]) / 100)
         out = pc.clean(out)
         info["aplanades"] = n_flat
     return out, info
@@ -606,6 +617,105 @@ def harmonize(m: trimesh.Trimesh, ref: trimesh.Trimesh, rounds: int = 4, flat_de
 
 
 # ---------------------------------------------------------------- zones planes
+
+def qualitat(m: trimesh.Trimesh) -> np.ndarray:
+    """Qualitat de cada triangle: 1 = equilàter, cap a 0 = estret i llarg (agulla o làmina)."""
+    V, F = m.vertices, m.faces
+    e = np.stack([V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 1]], V[F[:, 0]] - V[F[:, 2]]])
+    area = 0.5 * np.linalg.norm(np.cross(e[0], -e[2]), axis=1)
+    return 4 * np.sqrt(3) * area / np.maximum((e ** 2).sum((0, 2)), 1e-18)
+
+
+def elimina_estretes(m: trimesh.Trimesh, ref: trimesh.Trimesh, q_max: float = 0.3,
+                     area_frac: float = 0.6, tol: float = 0.008, cos_min: float = 0.75
+                     ) -> tuple[trimesh.Trimesh, int]:
+    """Treu els triangles estrets i petits, que aporten poc i compliquen el desplegat.
+
+    Un triangle sobra si la seva qualitat (`qualitat`) és menor que `q_max` i la seva àrea és
+    menor que `area_frac` vegades la mediana. Se'n col·lapsa l'aresta més curta: els dos
+    triangles que la comparteixen desapareixen i els veïns s'hi adapten, movent el vèrtex que
+    queda cap a l'extrem o el punt mig, el que s'allunyi menys de `ref`. No es fa si el vèrtex
+    s'allunya de `ref` més de `tol` (fracció de la diagonal), si algun veí gira més de
+    `arccos(cos_min)`, si en surt un triangle pitjor, o si la malla deixaria de ser manifold.
+    Retorna la malla (menys cares) i el nombre de triangles eliminats (de dos en dos).
+    """
+    import papercraft as pc
+
+    V = m.vertices.astype(float).copy()
+    F = m.faces.copy()
+    lim = tol * float(np.linalg.norm(m.extents))
+    pts, _ = trimesh.sample.sample_surface(ref, 40000, seed=11)
+    arbre = cKDTree(pts) if cKDTree is not None else None
+
+    def dist(p):
+        if arbre is not None:
+            return float(arbre.query(p)[0])
+        return float(np.sqrt(((pts - p) ** 2).sum(1).min()))
+
+    def q_de(Vs, Fs):
+        return qualitat(trimesh.Trimesh(Vs, Fs, process=False))
+
+    n_out = 0
+    for _ in range(len(F)):
+        tm = trimesh.Trimesh(V, F, process=False)
+        q, ar = qualitat(tm), tm.area_faces
+        cands = np.nonzero((q < q_max) & (ar < area_frac * np.median(ar)))[0]
+        if not len(cands):
+            break
+        em = pc.edge_faces(F)
+        vora = {int(v) for (a, b), fs in em.items() if len(fs) == 1 for v in (a, b)}
+        nbr: dict[int, set] = {}
+        for f in F:
+            for k in range(3):
+                nbr.setdefault(int(f[k]), set()).update((int(f[(k + 1) % 3]), int(f[(k + 2) % 3])))
+        fet = False
+        for f in cands[np.argsort(q[cands])]:
+            tri = F[f]
+            arestes = sorted(((float(np.linalg.norm(V[tri[k]] - V[tri[(k + 1) % 3]])),
+                               int(tri[k]), int(tri[(k + 1) % 3])) for k in range(3)))
+            for _l, a, b in arestes:
+                fs = em.get((min(a, b), max(a, b)), [])
+                if len(fs) != 2 or a in vora or b in vora:
+                    continue
+                opp = {int(v) for g in fs for v in F[g] if v not in (a, b)}
+                if nbr[a] & nbr[b] != opp:   # condició d'enllaç: si no, la malla es pinça
+                    continue
+                gone = set(int(g) for g in fs)
+                touch = np.array([g for g in np.nonzero(((F == a) | (F == b)).any(1))[0] if g not in gone])
+                F2 = F[touch].copy()
+                F2[F2 == b] = a
+                millor = None
+                for p in (V[a], V[b], 0.5 * (V[a] + V[b])):
+                    d = dist(p)
+                    if d > lim or (millor is not None and d >= millor[0]):
+                        continue
+                    V2 = V.copy()
+                    V2[a] = p
+                    n0 = np.cross(V[F[touch][:, 1]] - V[F[touch][:, 0]], V[F[touch][:, 2]] - V[F[touch][:, 0]])
+                    n1 = np.cross(V2[F2[:, 1]] - V2[F2[:, 0]], V2[F2[:, 2]] - V2[F2[:, 0]])
+                    l0, l1 = np.linalg.norm(n0, axis=1), np.linalg.norm(n1, axis=1)
+                    if (l1 < 1e-12).any() or ((n0 * n1).sum(1) < cos_min * l0 * l1).any():
+                        continue   # un veí es giraria o s'aplanaria
+                    if (q_de(V2, F2) < np.minimum(q[touch], q_max)).any():
+                        continue   # en sortiria un triangle pitjor
+                    millor = (d, p)
+                if millor is None:
+                    continue
+                V[a] = millor[1]
+                F = F.copy()
+                F[touch] = F2
+                F = np.delete(F, sorted(gone), axis=0)
+                n_out += len(gone)
+                fet = True
+                break
+            if fet:
+                break
+        if not fet:
+            break
+    out = trimesh.Trimesh(V, F, process=False)
+    out.remove_unreferenced_vertices()
+    return out, n_out
+
 
 def planarize(m: trimesh.Trimesh, tol_deg: float = 8.0, dist_frac: float = 0.012,
               min_faces: int = 2) -> tuple[trimesh.Trimesh, int]:

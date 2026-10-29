@@ -151,6 +151,12 @@ def sortida_valor(producte: str, clau: str) -> str:
     return next(v for k, _t, v, _i in SORTIDES[producte] if k == clau)
 
 
+def tots_recursos() -> list:
+    """Recursos de l'origen (imatge, primer GLB) seguits dels del disseny, disponibles des del principi."""
+    ss = st.session_state
+    return list(ss.get("recursos_origen", [])) + list(ss.get("recursos", []))
+
+
 def mostra() -> bool:
     """Dibuixa la ruta triada (petita, a dalt) i el pas pendent (gran, al mig).
 
@@ -200,14 +206,14 @@ def mostra() -> bool:
                             for r in ("paper", "cares", "veure", "recursos", "desplegat_html", "vista_tex"):
                                 ss.pop(r, None)
                         st.rerun()
-            if ss.get("recursos"):   # a la dreta de la ruta: descàrregues del que s'ha generat
+            if tots_recursos():   # a la dreta de la ruta: descàrregues del que s'ha generat
                 with cols[-1], st.container(key="recursos"):
                     with st.popover("📦 Recursos"):
                         if ss.get("desplegat_html"):
                             from ui import recursos
                             recursos.obre("🔍 Visualitza el desplegat (pestanya nova)", ss["desplegat_html"],
                                           "obre_desplegat")
-                        for i, (text, dades, nom, mime) in enumerate(ss["recursos"]):
+                        for i, (text, dades, nom, mime) in enumerate(tots_recursos()):
                             st.download_button(text, dades, nom, mime, key=f"rec_{i}", use_container_width=True)
             for col, (pas, clau) in zip(cols, triats):
                 with col, st.container(key=f"mini_{clau}"):
@@ -221,6 +227,7 @@ def mostra() -> bool:
                         for r in ("paper", "cares", "veure", "pantalla", "recursos", "desplegat_html", "vista_tex"):
                             ss.pop(r, None)
                         ss.pop("fitxers", None)
+                        ss.pop("recursos_origen", None)
                         if pas in ("origen", "via"):  # una altra imatge o model: res de l'anterior serveix
                             for k in ("img_generada",):
                                 ss.pop(k, None)

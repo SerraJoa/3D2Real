@@ -138,3 +138,27 @@ def test_absorb_small_treu_triangles_petits_sense_trencar_la_malla():
     assert n > 0 and len(out.faces) < len(m.faces)
     assert out.is_watertight and out.volume > 0.8 * m.volume
     assert rd.absorb_small(m, 0.5)[1] == 0   # res no és tan petit
+
+
+def test_elimina_estretes_treu_agulles_sense_trencar_la_malla():
+    ref = trimesh.creation.icosphere(subdivisions=3)
+    # Es parteix una aresta molt a prop d'un extrem: les quatre cares que la toquen en
+    # fan dues d'agulla, i el vèrtex nou és quasi sobre la superfície.
+    a, b = (int(x) for x in ref.faces[0][:2])
+    fs = [i for i, f in enumerate(ref.faces) if a in f and b in f]
+    n = len(ref.vertices)
+    V = np.vstack([ref.vertices, 0.98 * ref.vertices[a] + 0.02 * ref.vertices[b]])
+    nous = []
+    for i in fs:
+        f = [int(x) for x in ref.faces[i]]
+        c = next(x for x in f if x not in (a, b))
+        k = f.index(a)
+        orient = f[(k + 1) % 3] == b   # a→b en el sentit de la cara
+        nous += [[a, n, c], [n, b, c]] if orient else [[b, c, n], [n, c, a]]
+    F = np.vstack([np.delete(ref.faces, fs, axis=0), nous])
+    est = trimesh.Trimesh(V, F, process=False)
+    assert est.is_watertight and rd.qualitat(est).min() < 0.3
+    out, n_out = rd.elimina_estretes(est, ref, q_max=0.5)
+    assert n_out >= 2 and len(out.faces) < len(est.faces)
+    assert out.is_watertight
+    assert rd.qualitat(out).min() >= rd.qualitat(est).min()
