@@ -681,7 +681,9 @@ def elimina_estretes(m: trimesh.Trimesh, ref: trimesh.Trimesh, q_max: float = 0.
                 if nbr[a] & nbr[b] != opp:   # condició d'enllaç: si no, la malla es pinça
                     continue
                 gone = set(int(g) for g in fs)
-                touch = np.array([g for g in np.nonzero(((F == a) | (F == b)).any(1))[0] if g not in gone])
+                touch = np.array([g for g in np.nonzero(((F == a) | (F == b)).any(1))[0] if g not in gone], dtype=int)
+                if not len(touch):
+                    continue
                 F2 = F[touch].copy()
                 F2[F2 == b] = a
                 millor = None
