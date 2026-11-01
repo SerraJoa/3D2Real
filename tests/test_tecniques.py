@@ -94,3 +94,77 @@ def test_tota_la_biblioteca_del_repo_es_fabrica():
         part = e.crea_part(e.id, "paper")
         tecniques.fabrica(part)
         tecniques.talls(part)
+
+
+from parts import PlaFabricacio  # noqa: E402
+
+
+def _nau(**p):
+    return Part("nau", "cos", params=dict(amplada=100, profunditat=40, alcada=50, **p))
+
+
+def test_cos_dona_parets_i_base():
+    parets, base = tecniques.fabrica(_nau())
+    assert parets.meta["parets"] == [(0, 100), (100, 140), (140, 240), (240, 280)]
+    assert len(parets.plecs) == 3 and base.contorn.area == pytest.approx(4000)
+    sense = tecniques.fabrica(_nau(sense_base=True))
+    assert len(sense) == 1 and sense[0].contorn.area < parets.contorn.area
+
+
+def test_cos_amb_base_de_planta():
+    tri = tecniques.fabrica(Part("t", "cos", params=dict(base=[(0, 0), (60, 0), (30, 40)], alcada=20)))
+    assert len(tri[0].meta["parets"]) == 3
+    with pytest.raises(ValueError, match="3 punts"):
+        tecniques.fabrica(Part("t", "cos", params=dict(base=[(0, 0), (1, 1)], alcada=20)))
+    with pytest.raises(ValueError, match="vàlid"):
+        tecniques.fabrica(Part("t", "cos", params=dict(base=[(0, 0), (2, 2), (2, 0), (0, 2)], alcada=20)))
+
+
+def test_columna_te_tira_i_dues_tapes():
+    tira, dalt, baix = tecniques.fabrica(Part("c", "columna", params=dict(diametre=10, alcada=40, costats=8)))
+    assert len(tira.plecs) == 7
+    assert dalt.contorn.area == pytest.approx(baix.contorn.area) and dalt.contorn.area > 0
+    with pytest.raises(ValueError):
+        tecniques.fabrica(Part("c", "columna", params=dict(diametre=10, alcada=40, costats=2)))
+
+
+def _pla_amb_finestra(**fin):
+    return PlaFabricacio([
+        _nau(),
+        Part("fin", "forat", ancoratge="nau", params=dict(amplada=20, alcada=15, x=10, y=20, **fin)),
+    ])
+
+
+def test_fabrica_pla_retalla_la_paret_del_pare():
+    sense = tecniques.fabrica_pla(PlaFabricacio([_nau()]))["nau"][0]
+    peces = tecniques.fabrica_pla(_pla_amb_finestra(cara=2))
+    parets = peces["nau"][0]
+    assert parets.contorn.area == pytest.approx(sense.contorn.area - 20 * 15)
+    assert len(parets.contorn.interiors) == 1
+    assert parets.contorn.interiors[0].bounds[0] == pytest.approx(140 + 10)   # paret 2 comença a x=140
+    assert peces["fin"] == [] and peces["nau"][1].nom == "nau_base"
+
+
+def test_fabrica_pla_errors():
+    with pytest.raises(ValueError, match="no té la paret"):
+        tecniques.fabrica_pla(_pla_amb_finestra(cara=9))
+    with pytest.raises(ValueError, match="no cap"):
+        tecniques.fabrica_pla(PlaFabricacio([_nau(), Part("g", "forat", ancoratge="nau",
+                              params=dict(amplada=200, alcada=15))]))
+    with pytest.raises(ValueError, match="no en té"):
+        tecniques.fabrica_pla(PlaFabricacio([Part("c", "columna", params=dict(diametre=10, alcada=40)),
+                              Part("g", "forat", ancoratge="c", params=dict(amplada=2, alcada=2))]))
+
+
+def test_pla_sencer_amb_finestra_enfonsada_i_porta_mobil():
+    pla = PlaFabricacio([
+        _nau(),
+        BIB.get("finestra_quadrada_caixa5").crea_part("fin", "paper", ancoratge="nau",
+                                                       posicio=dict(x=10, y=20, cara=0)),
+        BIB.get("porta_quadrada_frontissa").crea_part("porta", "paper", ancoratge="nau",
+                                                       posicio=dict(x=60, y=0, cara=0)),
+    ])
+    peces = tecniques.fabrica_pla(pla)
+    assert len(peces["nau"][0].contorn.interiors) == 1       # la porta toca el terra: osca, no forat
+    assert [q.nom for q in peces["fin"]] == ["fin"] and [q.nom for q in peces["porta"]] == ["porta"]
+    assert peces["nau"][0].contorn.area < tecniques.fabrica(_nau())[0].contorn.area

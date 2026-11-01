@@ -24,6 +24,7 @@ class Peca:
     contorn: Polygon
     plecs: list[tuple[tuple[float, float], tuple[float, float], str]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    meta: dict = field(default_factory=dict)      # dades de la tècnica (p. ex. posició de les parets)
 
 
 def rectangle(nom: str, w: float, h: float) -> Peca:
@@ -61,7 +62,7 @@ def afegeix_solapes(p: Peca, arestes: list[tuple], h: float, angle: float = 45.0
     unio = unary_union([p.contorn, *(solapa(p.contorn, a, b, h, angle) for a, b in arestes)])
     if not isinstance(unio, Polygon):
         raise ValueError("Les solapes han de quedar enganxades al contorn en una sola peça.")
-    return Peca(p.nom, unio.simplify(0), list(p.plecs), p.notes + [f"{len(arestes)} solapes d'enganxar"])
+    return Peca(p.nom, unio.simplify(0), list(p.plecs), p.notes + [f"{len(arestes)} solapes d'enganxar"], dict(p.meta))
 
 
 def retalla(p: Peca, forma: Polygon) -> Peca:
@@ -70,7 +71,7 @@ def retalla(p: Peca, forma: Polygon) -> Peca:
     nou = p.contorn.difference(forma)
     if nou.is_empty or not isinstance(nou, Polygon):
         raise ValueError("El retall parteix la peça o la deixa buida.")
-    return Peca(p.nom, nou, list(p.plecs), list(p.notes))
+    return Peca(p.nom, nou, list(p.plecs), list(p.notes), dict(p.meta))
 
 
 def plega(p: Peca, a, b, tipus: str = VALL) -> Peca:
@@ -79,10 +80,10 @@ def plega(p: Peca, a, b, tipus: str = VALL) -> Peca:
         raise ValueError(f"Tipus de plec «{tipus}» desconegut (cal {VALL} o {MUNTANYA}).")
     if not p.contorn.buffer(TOL).contains(LineString([a, b])):
         raise ValueError("El plec surt de la peça.")
-    return Peca(p.nom, p.contorn, [*p.plecs, (tuple(a), tuple(b), tipus)], list(p.notes))
+    return Peca(p.nom, p.contorn, [*p.plecs, (tuple(a), tuple(b), tipus)], list(p.notes), dict(p.meta))
 
 
 def trasllada(p: Peca, dx: float, dy: float) -> Peca:
     return Peca(p.nom, translate(p.contorn, dx, dy),
                 [((a[0] + dx, a[1] + dy), (b[0] + dx, b[1] + dy), t) for a, b, t in p.plecs],
-                list(p.notes))
+                list(p.notes), dict(p.meta))

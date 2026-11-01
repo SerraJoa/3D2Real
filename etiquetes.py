@@ -88,8 +88,10 @@ class Etiqueta:
 
     def crea_part(self, nom: str, desplegable: str = BASE, mides: dict[str, float] | None = None,
                   ancoratge: str | None = None, origen: str = "manual",
-                  confianca: float = 1.0) -> Part:
+                  confianca: float = 1.0, posicio: dict | None = None) -> Part:
+        """`posicio`: on cau l'element al mur on s'ancora (x, y i cara); no és una mida de l'etiqueta."""
         params = self.resol(mides, desplegable)
+        params.update(posicio or {})
         params.update(etiqueta=self.id, forma=self.forma, espai=self.espai,
                       segona_paret=self.segona_paret, muntatge=list(self.model(desplegable).muntatge))
         return Part(nom, self.tipus, params=params, ancoratge=ancoratge,

@@ -6,13 +6,15 @@ resta del pla. Les mides són a `part.params` (les posa l'etiqueta, vegeu `etiqu
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
+from shapely.affinity import translate
 from shapely.geometry import Polygon
 from shapely.ops import unary_union
 
 import operacions as op
-from parts import Part
+from parts import Part, PlaFabricacio
 
 
 def caixa_5_cares(part: Part) -> list[op.Peca]:
@@ -73,7 +75,98 @@ def retall_frontissa(part: Part) -> list[op.Peca]:
     return [peca]
 
 
+def _tira(nom: str, llargs: list[float], h: float, solapa: float, tanca: bool = True,
+          fons: bool = True) -> op.Peca:
+    """Tira de parets rectangulars una al costat de l'altra (alçada h), amb plecs entre elles, una
+    solapa de tancament a l'extrem i, si `fons`, solapes a la vora de baix per enganxar la base."""
+    total = sum(llargs)
+    peca = op.Peca(nom, Polygon([(0, 0), (total, 0), (total, h), (0, h)]))
+    x, talls = 0.0, []
+    for L in llargs[:-1]:
+        x += L
+        talls.append(x)
+    if fons:
+        peca = op.afegeix_solapes(peca, _costats_baix(llargs), solapa)
+    if tanca:
+        peca = op.afegeix_solapes(peca, [((total, 0), (total, h))], solapa)
+    for x in talls:
+        peca = op.plega(peca, (x, 0), (x, h))
+    return peca
+
+
+def _costats_baix(llargs: list[float]) -> list[tuple]:
+    x, out = 0.0, []
+    for L in llargs:
+        out.append(((x, 0), (x + L, 0)))
+        x += L
+    return out
+
+
+def _base(part: Part) -> Polygon:
+    """Polígon de la base: `base` (llista de punts) o rectangle amplada × profunditat."""
+    if "base" in part.params:
+        pts = [tuple(map(float, q)) for q in part.params["base"]]
+        if len(pts) < 3:
+            raise ValueError("La base necessita almenys 3 punts.")
+        g = Polygon(pts)
+        if not g.is_valid or g.area <= 0:
+            raise ValueError("La base no és un polígon vàlid.")
+        return g
+    w, d = float(part.params["amplada"]), float(part.params["profunditat"])
+    if min(w, d) <= 0:
+        raise ValueError("Amplada i profunditat han de ser positives.")
+    return Polygon([(0, 0), (w, 0), (w, d), (0, d)])
+
+
+def cos(part: Part) -> list[op.Peca]:
+    """Volum principal (nau, caixa): tira de parets al voltant de la base, més la base.
+
+    Params: base (punts de la planta) o amplada × profunditat; alcada; solapa (mm); sense_base:
+    true per a una caixa oberta de baix. Les finestres i portes d'`ancoratge` aquesta part hi
+    fan els seus retalls a la paret `cara` (índex de l'aresta de la base) (vegeu `fabrica_pla`)."""
+    h, s = float(part.params["alcada"]), float(part.params.get("solapa", 6.0))
+    if h <= 0:
+        raise ValueError("L'alçada ha de ser positiva.")
+    base = _base(part)
+    pts = list(base.exterior.coords)[:-1]
+    llargs = [math.dist(pts[i], pts[(i + 1) % len(pts)]) for i in range(len(pts))]
+    amb_base = not part.params.get("sense_base", False)
+    parets = _tira(f"{part.nom}_parets", llargs, h, s, fons=amb_base)
+    parets.meta["parets"] = [(sum(llargs[:i]), sum(llargs[:i + 1])) for i in range(len(llargs))]
+    parets.meta["alcada"] = h
+    parets.notes += ["Plega la tira pels plecs i tanca-la amb la solapa."]
+    out = [parets]
+    if amb_base:
+        b = op.Peca(f"{part.nom}_base", base)
+        b.notes += ["Enganxa les solapes de baix de les parets a la vora de la base."]
+        out.append(b)
+    return out
+
+
+def columna(part: Part) -> list[op.Peca]:
+    """Columna prismàtica de `costats` costats (12 per defecte, rodona a ull): tira de parets amb
+    solapes a dalt i a baix i les dues tapes (polígons regulars).
+
+    Params: diametre, alcada, costats, solapa."""
+    d, h = float(part.params["diametre"]), float(part.params["alcada"])
+    n, s = int(part.params.get("costats", 12)), float(part.params.get("solapa", 4.0))
+    if min(d, h) <= 0 or n < 3:
+        raise ValueError("Diàmetre i alçada han de ser positius i cal almenys 3 costats.")
+    r = d / 2
+    costat = 2 * r * math.sin(math.pi / n)
+    tira = _tira(f"{part.nom}_tira", [costat] * n, h, s)
+    llargs = [costat] * n
+    dalt = [((x0, h), (x1, h)) for (x0, _), (x1, _) in _costats_baix(llargs)]
+    tira = op.afegeix_solapes(tira, dalt, s)
+    tapa = Polygon([(r * math.cos(2 * math.pi * i / n), r * math.sin(2 * math.pi * i / n)) for i in range(n)])
+    out = [tira, op.Peca(f"{part.nom}_tapa_dalt", tapa), op.Peca(f"{part.nom}_tapa_baix", tapa)]
+    tira.notes += ["Plega la tira pels plecs, tanca-la i enganxa les solapes a les tapes."]
+    return out
+
+
 TECNIQUES: dict[str, Callable[[Part], list[op.Peca]]] = {
+    "cos": cos,
+    "columna": columna,
     "caixa_5_cares": caixa_5_cares,
     "enfonsat": caixa_5_cares,          # mateixa xarxa; el mur es retalla igual (vegeu `talls`)
     "sortint": sortint,
@@ -106,3 +199,28 @@ def fabrica(part: Part) -> list[op.Peca]:
     except KeyError:
         raise ValueError(f"Cap tècnica «{part.tecnica}» (hi ha {', '.join(TECNIQUES)}).") from None
     return f(part)
+
+
+def fabrica_pla(pla: PlaFabricacio) -> dict[str, list[op.Peca]]:
+    """Peces de cada part, en ordre de muntatge. Els retalls de cada part (`talls`) s'apliquen a la
+    paret del cos on s'ancora: `cara` = índex de l'aresta de la base, `x` des de l'inici de la paret
+    i `y` des de baix. Un retall fora de la paret és un error."""
+    peces = {p.nom: fabrica(p) for p in pla.ordre_muntatge()}
+    for p in pla.ordre_muntatge():
+        if p.ancoratge is None or not talls(p):
+            continue
+        pare = next((q for q in peces[p.ancoratge] if "parets" in q.meta), None)
+        if pare is None:
+            raise ValueError(f"«{p.nom}» retalla un mur, però «{p.ancoratge}» no en té.")
+        cara = int(p.params.get("cara", 0))
+        parets = pare.meta["parets"]
+        if not 0 <= cara < len(parets):
+            raise ValueError(f"«{p.nom}»: «{p.ancoratge}» no té la paret {cara} (en té {len(parets)}).")
+        x0, x1 = parets[cara]
+        for t in talls(p):
+            t = translate(t, x0, 0)
+            if not Polygon([(x0, 0), (x1, 0), (x1, pare.meta["alcada"]), (x0, pare.meta["alcada"])]).contains(t):
+                raise ValueError(f"«{p.nom}» no cap a la paret {cara} de «{p.ancoratge}».")
+            pare = op.retalla(pare, t)
+        peces[p.ancoratge] = [pare if q.nom == pare.nom else q for q in peces[p.ancoratge]]
+    return peces
