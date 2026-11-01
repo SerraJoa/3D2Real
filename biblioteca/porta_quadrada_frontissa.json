@@ -1,0 +1,16 @@
+{
+  "versio": 1,
+  "id": "porta_quadrada_frontissa",
+  "element": "porta",
+  "forma": "quadrada",
+  "espai": "maqueta",
+  "tipus": "retall_frontissa",
+  "mides": {
+    "amplada": {"defecte": 20, "min": 4, "max": 500},
+    "alcada": {"defecte": 40, "min": 4, "max": 500},
+    "frontissa": {"defecte": 5, "min": 2, "max": 20}
+  },
+  "models": {
+    "*": {"muntatge": ["Retalla la fulla amb la tira.", "Enganxa la tira al mur, al costat de l'obertura.", "La fulla s'obre pel plec."]}
+  }
+}

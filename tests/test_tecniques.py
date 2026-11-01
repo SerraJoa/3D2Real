@@ -47,3 +47,50 @@ def test_de_l_etiqueta_a_les_peces():
     (peca,) = tecniques.fabrica(part)
     assert peca.nom == "fin1" and part.params["brida"] == 4     # model de paper
     assert peca.contorn.bounds[0] < -12                          # profunditat 12
+
+
+def _p(tecnica, **p):
+    return Part("e", tecnica, params=dict(amplada=20, alcada=30, **p))
+
+
+def test_forat_no_te_peces_pero_retalla_el_mur():
+    p = _p("forat", x=10, y=5)
+    assert tecniques.fabrica(p) == []
+    (t,) = tecniques.talls(p)
+    assert t.bounds == (10, 5, 30, 35)
+
+
+def test_sortint_no_retalla_i_te_brida():
+    p = _p("sortint", profunditat=8)
+    assert tecniques.talls(p) == []
+    (peca,) = tecniques.fabrica(p)
+    (caixa,) = tecniques.fabrica(Part("e", "caixa_5_cares", params=dict(amplada=20, alcada=30, profunditat=8, brida=0)))
+    assert peca.contorn.area > caixa.contorn.area
+    assert any("pel davant" in n for n in peca.notes)
+
+
+def test_enfonsat_i_caixa_retallen_el_mur_igual():
+    for t in ("enfonsat", "caixa_5_cares"):
+        (c,) = tecniques.talls(_p(t, profunditat=8, x=1, y=2))
+        assert c.bounds == (1, 2, 21, 32)
+
+
+def test_frontissa_es_una_fulla_amb_tira_i_un_plec():
+    p = _p("retall_frontissa", frontissa=5)
+    (peca,) = tecniques.fabrica(p)
+    assert peca.contorn.bounds == pytest.approx((-5, 0, 20, 30))
+    assert peca.plecs == [((0, 0), (0, 30), "vall")]
+    assert peca.contorn.area == pytest.approx(20 * 30 + 5 * 30)
+    assert len(tecniques.talls(p)) == 1
+
+
+def test_talls_amb_forma_no_implementada():
+    with pytest.raises(ValueError, match="forma"):
+        tecniques.talls(Part("e", "forat", params=dict(amplada=20, alcada=30, forma="arc")))
+
+
+def test_tota_la_biblioteca_del_repo_es_fabrica():
+    for e in BIB:
+        part = e.crea_part(e.id, "paper")
+        tecniques.fabrica(part)
+        tecniques.talls(part)

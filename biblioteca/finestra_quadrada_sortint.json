@@ -1,0 +1,18 @@
+{
+  "versio": 1,
+  "id": "finestra_quadrada_sortint",
+  "element": "finestra",
+  "forma": "quadrada",
+  "espai": "superficie",
+  "tipus": "sortint",
+  "mides": {
+    "amplada": {"defecte": 20, "min": 4, "max": 500},
+    "alcada": {"defecte": 30, "min": 4, "max": 500},
+    "profunditat": {"defecte": 3, "min": 1, "max": 100},
+    "solapa": {"defecte": 5, "min": 2, "max": 20},
+    "brida": {"defecte": 4, "min": 1, "max": 20}
+  },
+  "models": {
+    "*": {"muntatge": ["Retalla la creu pel contorn.", "Plega les parets i enganxa les solapes.", "Enganxa el bloc sobre el mur."]}
+  }
+}
