@@ -1,0 +1,19 @@
+{
+  "versio": 1,
+  "id": "finestra_quadrada_caixa5",
+  "element": "finestra",
+  "forma": "quadrada",
+  "espai": "maqueta",
+  "tipus": "caixa_5_cares",
+  "mides": {
+    "amplada": {"defecte": 20, "min": 4, "max": 500},
+    "alcada": {"defecte": 30, "min": 4, "max": 500},
+    "profunditat": {"defecte": 8, "min": 1, "max": 100},
+    "solapa": {"defecte": 5, "min": 2, "max": 20},
+    "brida": {"defecte": 0, "min": 0, "max": 20}
+  },
+  "models": {
+    "*": {"muntatge": ["Retalla la creu pel contorn.", "Plega les parets i enganxa les solapes.", "Enganxa la caixa a darrere del forat."]},
+    "paper": {"params": {"brida": 4}}
+  }
+}
