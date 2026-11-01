@@ -1,0 +1,17 @@
+{
+  "versio": 1,
+  "id": "finestra_quadrada_forat",
+  "element": "finestra",
+  "forma": "quadrada",
+  "espai": "superficie",
+  "tipus": "forat",
+  "mides": {
+    "amplada": {"defecte": 20, "min": 2, "max": 500},
+    "alcada": {"defecte": 30, "min": 2, "max": 500}
+  },
+  "models": {
+    "*": {"muntatge": ["Retalla el rectangle de la finestra."]},
+    "paper": {"params": {"marge": 1.0}, "muntatge": ["Talla el rectangle amb cúter.", "Marca la vora amb regla."]},
+    "cnc": {"muntatge": ["El rectangle es talla amb la resta de la placa."]}
+  }
+}
