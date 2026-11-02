@@ -164,6 +164,36 @@ def columna(part: Part) -> list[op.Peca]:
     return out
 
 
+def teulada_dues_aigues(part: Part) -> list[op.Peca]:
+    """Teulada per defecte: dues vessants i dos frontons, amb la cumbrera al centre.
+
+    Params: `base` (punts de la planta; s'agafa el seu rectangle orientat mínim, amb la cumbrera
+    pel costat llarg) o `llarg` × `fons`; `alcada_cumbrera` (35 % del fons per defecte); `solapa` (mm).
+    La vessant és una sola peça plegada per la cumbrera; els frontons s'hi enganxen per darrere."""
+    if "base" in part.params:
+        pts = list(_base(part).minimum_rotated_rectangle.exterior.coords)
+        a, b = math.dist(pts[0], pts[1]), math.dist(pts[1], pts[2])
+        llarg, fons = max(a, b), min(a, b)
+    else:
+        llarg, fons = float(part.params["llarg"]), float(part.params["fons"])
+    r = float(part.params.get("alcada_cumbrera", 0.35 * fons))
+    s = float(part.params.get("solapa", 5.0))
+    if min(llarg, fons, r, s) <= 0:
+        raise ValueError("Llarg, fons, alçada de cumbrera i solapa han de ser positius.")
+    pendent = math.hypot(fons / 2, r)
+    vessants = op.Peca(f"{part.nom}_vessants", Polygon([(0, 0), (llarg, 0), (llarg, 2 * pendent), (0, 2 * pendent)]))
+    vessants = op.afegeix_solapes(vessants, [((0, 0), (llarg, 0)), ((llarg, 2 * pendent), (0, 2 * pendent))], s)
+    vessants = op.plega(vessants, (0, pendent), (llarg, pendent), op.MUNTANYA)
+    vessants.notes += ["Plega per la cumbrera i enganxa les solapes de baix al cap de les parets."]
+    out = [vessants]
+    for lloc in ("a", "b"):
+        f = op.Peca(f"{part.nom}_fronto_{lloc}", Polygon([(0, 0), (fons, 0), (fons / 2, r)]))
+        f = op.afegeix_solapes(f, [((fons, 0), (fons / 2, r)), ((fons / 2, r), (0, 0))], s)
+        f.notes += ["Enganxa el fronto a l'extrem de la paret i les solapes sota les vessants."]
+        out.append(f)
+    return out
+
+
 TECNIQUES: dict[str, Callable[[Part], list[op.Peca]]] = {
     "cos": cos,
     "columna": columna,
@@ -171,6 +201,7 @@ TECNIQUES: dict[str, Callable[[Part], list[op.Peca]]] = {
     "enfonsat": caixa_5_cares,          # mateixa xarxa; el mur es retalla igual (vegeu `talls`)
     "sortint": sortint,
     "retall_frontissa": retall_frontissa,
+    "teulada_dues_aigues": teulada_dues_aigues,
     "forat": lambda part: [],            # no té peces pròpies: només retalla el mur
 }
 

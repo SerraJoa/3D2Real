@@ -168,3 +168,27 @@ def test_pla_sencer_amb_finestra_enfonsada_i_porta_mobil():
     assert len(peces["nau"][0].contorn.interiors) == 1       # la porta toca el terra: osca, no forat
     assert [q.nom for q in peces["fin"]] == ["fin"] and [q.nom for q in peces["porta"]] == ["porta"]
     assert peces["nau"][0].contorn.area < tecniques.fabrica(_nau())[0].contorn.area
+
+
+def test_teulada_dues_aigues_des_de_la_planta():
+    p = Part("t", "teulada_dues_aigues", params=dict(base=[(0, 0), (100, 0), (100, 40), (0, 40)]))
+    vessants, fa, fb = tecniques.fabrica(p)
+    r = 0.35 * 40
+    pendent = (20**2 + r**2) ** 0.5
+    assert vessants.contorn.area > 100 * 2 * pendent                  # vessants + solapes
+    assert vessants.contorn.bounds[2] == pytest.approx(100)
+    assert len(vessants.plecs) == 1 and fa.contorn.is_valid and fb.contorn.is_valid
+
+
+def test_teulada_per_defecte_penja_del_cos_sense_retalls():
+    from parts import PlaFabricacio
+    pla = PlaFabricacio()
+    pla.afegeix(Part("nau", "cos", params=dict(amplada=100, profunditat=40, alcada=30)))
+    pla.afegeix(Part("teulada", "teulada_dues_aigues", ancoratge="nau", origen="vl", confianca=0.5,
+                     params=dict(llarg=100, fons=40)))
+    assert [q.nom for q in tecniques.fabrica_pla(pla)["teulada"]][0] == "teulada_vessants"
+
+
+def test_teulada_mides_no_positives():
+    with pytest.raises(ValueError, match="positius"):
+        tecniques.fabrica(Part("t", "teulada_dues_aigues", params=dict(llarg=100, fons=0)))
