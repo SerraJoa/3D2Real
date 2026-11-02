@@ -4,3 +4,4 @@ __pycache__/
 *.svg
 .pytest_cache/
 dades/sortida/
+captura/app/build/
