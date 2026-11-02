@@ -3,7 +3,7 @@
     python3 captura/baixa_sessions.py [--esborra-remot]
 
 Config (la crees tu; secret, permisos 600): ~/.config/3d2real-captura/sftp.json
-    {"host": "...", "port": 22, "user": "...", "password": "...", "remot": "ruta/captura/dades"}
+    {"host": "...", "port": 22, "user": "...", "password": "...", "carpeta": "3d2real"}   (és el mateix fitxer que usa desplega.py)
     (en lloc de "password" pots posar "clau": "/ruta/id_ed25519")
 Destí: dades/captures/<sessió>/. Una sessió és completa si té el fitxer `.complet` al servidor.
 Per defecte no s'esborra res del servidor.
@@ -51,7 +51,7 @@ def connecta():
     else:
         kw["password"] = d["password"]
     c.connect(**kw)
-    return c, c.open_sftp(), d["remot"].rstrip("/")
+    return c, c.open_sftp(), (d.get("remot") or d.get("carpeta", "3d2real").rstrip("/") + "/dades").rstrip("/")
 
 
 def main():

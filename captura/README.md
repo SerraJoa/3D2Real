@@ -11,7 +11,8 @@ permet pujar, no llegir ni esborrar.
 
 ## Servidor (un cop)
 1. `python3 captura/genera_token.py` → imprimeix `config.php` i `pujada.json`.
-2. Puja `captura/servidor/pujada.php` i el `config.php` generat a una carpeta del teu hosting, p. ex. `/captura/`.
+2. Crea `~/.config/3d2real-captura/sftp.json` (format a la capçalera de `desplega.py`) i executa `python3 captura/desplega.py`
+   (`--sec` per veure què faria). Puja `pujada.php` i `config.php` a la carpeta `3d2real` del hosting.
    La carpeta `dades/` es crea sola, amb un `.htaccess` que la fa inaccessible per HTTP.
 3. `python3 captura/prova_servidor.py https://EL-TEU-DOMINI/captura/pujada.php` (ha de sortir tot OK).
 4. Al mòbil: copia el `pujada.json` a `Android/data/cat.escena.captura3d/files/` (amb `adb push` o el gestor de fitxers).
