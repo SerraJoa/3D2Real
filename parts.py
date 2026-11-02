@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-ORIGENS = ("manual", "detectat", "vl")
+ORIGENS = ("manual", "detectat", "vl", "defecte")
 VERSIO = 1
 
 
